@@ -1,0 +1,21 @@
+[Unit]
+Description=ProxmoxVue Agent
+Documentation=https://github.com/TheLion/proxmoxvue-agent
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/proxmoxvue-agent run
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/proxmoxvue-agent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
