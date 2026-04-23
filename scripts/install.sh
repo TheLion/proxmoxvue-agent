@@ -105,6 +105,7 @@ Type=simple
 ExecStart=/usr/local/bin/proxmoxvue-agent run
 Restart=on-failure
 RestartSec=5
+RestartPreventExitStatus=78
 User=root
 Group=root
 NoNewPrivileges=true

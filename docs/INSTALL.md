@@ -28,6 +28,49 @@ The script:
 7. Calls `proxmoxvue-agent --register <CODE>` to exchange the code for credentials
 8. Enables and starts the service
 
+After step 7 you must add your Proxmox API token to
+`/etc/proxmoxvue-agent/config.yml` — see [Proxmox API token](#proxmox-api-token)
+below. The service won't start successfully until that section is
+populated.
+
+## Proxmox API token
+
+Create a dedicated API token so the agent never touches your root
+password:
+
+1. In the Proxmox web-UI: **Datacenter → Permissions → API Tokens → Add**
+2. Pick the user (typically `root@pam` or a dedicated `proxmoxvue@pve`
+   user), give the token an ID (e.g. `proxmoxvue-agent`), uncheck
+   **Privilege Separation** for now, click **Add** — copy the UUID it
+   shows once (it's not recoverable)
+3. Grant the token access: **Datacenter → Permissions → Add → API Token
+   Permission**, path `/`, token `user@realm!tokenid`, role
+   `PVEVMAdmin` (for start/stop/reboot later) or `PVEAuditor` (read-only
+   for snapshot-push only)
+
+Then edit `/etc/proxmoxvue-agent/config.yml` (mode `0600`):
+
+```yaml
+supabase:
+  project_ref: fjesjyoxpkalaudfyebx
+  host_id: <filled by --register>
+  refresh_token: <filled by --register>
+proxmox:
+  api_url: https://127.0.0.1:8006
+  api_token_id: root@pam!proxmoxvue-agent
+  api_token_secret: 00000000-0000-0000-0000-000000000000
+  verify_tls: false
+```
+
+Finally:
+
+```sh
+sudo systemctl restart proxmoxvue-agent
+sudo journalctl -u proxmoxvue-agent -f
+```
+
+You should see `snapshot pushed (N bytes)` every 30 seconds.
+
 ## Manual install
 
 If you prefer not to pipe a remote script through `sudo sh`:
