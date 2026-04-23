@@ -36,7 +36,7 @@ type ProxmoxConfig struct {
 	APIURL         string `yaml:"api_url,omitempty"`
 	APITokenID     string `yaml:"api_token_id,omitempty"`
 	APITokenSecret string `yaml:"api_token_secret,omitempty"`
-	VerifyTLS      bool   `yaml:"verify_tls,omitempty"`
+	VerifyTLS      bool   `yaml:"verify_tls"`
 }
 
 func (c ProxmoxConfig) String() string {
