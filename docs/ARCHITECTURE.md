@@ -27,6 +27,56 @@ so the ProxmoxVue iPad app can manage the cluster from anywhere,
 **The agent makes only outbound connections.** No port is opened on
 your host.
 
+## Command flow
+
+Commands worden door de iOS-app (owner) in `public.commands` INSERT'ed.
+De agent subscribet via Supabase Realtime op INSERT-events gefilterd op
+`host_id=eq.<mine>`, claimed de rij atomair via PATCH met conditie
+`status=eq.pending`, voert de bijhorende Proxmox-actie uit, en schrijft
+het resultaat terug in dezelfde rij.
+
+### Command contract
+
+| Veld | Waarde |
+|---|---|
+| `kind` | `start` \| `stop` \| `reboot` \| `shutdown` \| `suspend` \| `resume` |
+| `payload.guest_kind` | `qemu` \| `lxc` |
+| `payload.node` | Proxmox-nodenaam |
+| `payload.vmid` | Numeric VMID |
+
+Iteratie 1 dekt alleen power-acties. Snapshot/create/delete/config-edit
+volgen in latere iteraties.
+
+### TTL (decision #196)
+
+`expires_at` staat default op `now() + 30s`. Een command die bij het
+claim-moment voorbij de expiry is, wordt als `status=expired`
+afgeschreven zonder uitvoering. Dat voorkomt dat een agent die na een
+lange netwerkhickup weer online komt, oude commando's alsnog uitvoert.
+
+### Idempotency
+
+De `ClaimCommand`-PATCH zet `status=claimed` met conditie
+`status=eq.pending`. PostgREST retourneert een lege array als de
+conditie niet matchte — de agent interpreteert dat als "al geclaimed".
+Twee agents die tegelijk claimen krijgen dus automatisch een
+winner/loser.
+
+### Geen catch-up — presence-based gating
+
+De agent doet géén scan bij reconnect. In plaats daarvan enabled hij
+**Supabase Realtime presence** op z'n command-channel, en de iOS-app
+subscribet daarop. Zolang de agent's WS verbonden is, zien iOS-clients
+`presence_join` en kunnen ze enqueue-acties enablen; valt de WS weg,
+dan krijgen ze binnen ~15s een `presence_leave` en disabelt de UI de
+acties.
+
+Dit is strikter dan `hosts.last_seen_at` (die is REST-based en mist
+WS-only disconnects) en vangt het scenario op waarin een agent nog
+status pushed maar z'n command-subscribe dood is. De 30s TTL blijft
+als vangnet voor de zeldzame race (agent-WS valt precies tussen
+enqueue en verwerking weg).
+
 ## Outbound connections
 
 | Target | Protocol | Purpose |

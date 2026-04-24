@@ -12,9 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config loading/saving (`/etc/proxmoxvue-agent/config.yml`, mode `0600`)
 - Redacting `String()` methods on credential-bearing structs so
   `fmt.Printf("%+v", cfg)` never leaks the Supabase refresh token
-
-### Not yet implemented
-- Runtime loop (Supabase WebSocket subscribe on `commands`,
-  status-snapshot push every 30s)
-- Proxmox REST adapter
-- Command whitelist + payload validation
+- 30s status-snapshot push (`status_snapshots` INSERT via PostgREST)
+- Proxmox REST adapter: `cluster/resources`, power-actions
+  (start/stop/reboot/shutdown/suspend/resume) + UPID polling
+- Supabase Realtime WS subscribe on `public.commands` with presence
+  enabled (iOS clients can see the agent's WS-online state via
+  `presence_join`/`presence_leave` — stricter than `last_seen_at`)
+- Command dispatcher: atomic claim (conditional PATCH on
+  `status=pending`), Proxmox dispatch, await UPID, result write-back
+  with `exitstatus`. TTL-expired rows are marked `expired` so the
+  iOS-UI can surface that state instead of hanging on `pending`
