@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/TheLion/proxmoxvue-agent/internal/commands"
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
@@ -54,6 +55,18 @@ func Start(ctx context.Context, configPath string) error {
 		interval = time.Duration(cfg.Agent.PollIntervalSeconds) * time.Second
 	}
 
+	// === Command pipeline (naast de status-push-ticker). ===
+	dispatcher := commands.New(pve, sb)
+	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.HostID)
+	if err != nil {
+		return fmt.Errorf("subscribe commands: %w", err)
+	}
+	go func() {
+		for cmd := range cmdCh {
+			go handleCommand(ctx, dispatcher, cmd)
+		}
+	}()
+
 	// First push happens immediately so hosts.last_seen_at becomes
 	// non-null at boot without waiting a full tick.
 	pushOnce(ctx, pve, sb, cfg.Supabase.HostID)
@@ -73,6 +86,12 @@ func Start(ctx context.Context, configPath string) error {
 				}
 			}
 		}
+	}
+}
+
+func handleCommand(ctx context.Context, d *commands.Dispatcher, cmd supabase.Command) {
+	if err := d.Handle(ctx, cmd); err != nil {
+		log.Printf("command %d: %v", cmd.ID, err)
 	}
 }
 
