@@ -30,11 +30,12 @@ const refreshSkew = 30 * time.Second
 type PersistRefreshFunc func(newRefreshToken string) error
 
 type Client struct {
-	projectRef   string
-	httpClient   *http.Client
-	persist      PersistRefreshFunc
-	authBase     string
-	restBase     string
+	projectRef  string
+	httpClient  *http.Client
+	persist     PersistRefreshFunc
+	authBase    string
+	restBase    string
+	realtimeURL string // override voor tests; leeg = wss://<ref>.supabase.co/realtime/v1/websocket
 
 	mu           sync.Mutex
 	accessToken  string
