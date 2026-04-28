@@ -15,13 +15,14 @@ import (
 
 // mockRealtimeServer is een minimale Phoenix-WS server voor tests.
 type mockRealtimeServer struct {
-	srv           *httptest.Server
-	mu            sync.Mutex
-	conn          *websocket.Conn
-	joinedTopic   string
-	joinedPayload map[string]any
-	joinReply     string // "ok" (default) of "error"
-	ready         chan struct{}
+	srv             *httptest.Server
+	mu              sync.Mutex
+	conn            *websocket.Conn
+	joinedTopic     string
+	joinedPayload   map[string]any
+	joinReply       string // "ok" (default) of "error"
+	ready           chan struct{}
+	presencePayload map[string]any // laatste 'presence'-frame payload (na phx_reply)
 }
 
 func newMockRealtime(t *testing.T) *mockRealtimeServer {
@@ -45,7 +46,9 @@ func newMockRealtime(t *testing.T) *mockRealtimeServer {
 			}
 			var msg map[string]any
 			_ = json.Unmarshal(raw, &msg)
-			if ev, _ := msg["event"].(string); ev == "phx_join" {
+			ev, _ := msg["event"].(string)
+			switch ev {
+			case "phx_join":
 				m.mu.Lock()
 				m.joinedTopic, _ = msg["topic"].(string)
 				m.joinedPayload, _ = msg["payload"].(map[string]any)
@@ -65,6 +68,10 @@ func newMockRealtime(t *testing.T) *mockRealtimeServer {
 				default:
 					close(m.ready)
 				}
+			case "presence":
+				m.mu.Lock()
+				m.presencePayload, _ = msg["payload"].(map[string]any)
+				m.mu.Unlock()
 			}
 		}
 	}))
@@ -145,6 +152,60 @@ func TestSubscribeCommands_JoinsCorrectChannel(t *testing.T) {
 	first, _ := pc[0].(map[string]any)
 	if filter, _ := first["filter"].(string); !strings.Contains(filter, "host-abc-123") {
 		t.Errorf("filter=%q", filter)
+	}
+}
+
+func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
+	m := newMockRealtime(t)
+	defer m.Close()
+
+	c := fakeTokenClient(t, "http://unused")
+	c.realtimeURL = m.wsURL()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := c.SubscribeCommands(ctx, "host-abc-123")
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	select {
+	case <-m.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("join never arrived")
+	}
+
+	// Track-frame komt direct na phx_reply ok. Geef de write-loop heel kort
+	// de tijd om bij de mock te landen.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		got := m.presencePayload
+		m.mu.Unlock()
+		if got != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	m.mu.Lock()
+	payload := m.presencePayload
+	m.mu.Unlock()
+	if payload == nil {
+		t.Fatal("no presence frame received within deadline")
+	}
+	if typ, _ := payload["type"].(string); typ != "presence" {
+		t.Errorf("payload.type=%q want %q", typ, "presence")
+	}
+	if ev, _ := payload["event"].(string); ev != "track" {
+		t.Errorf("payload.event=%q want %q", ev, "track")
+	}
+	state, _ := payload["payload"].(map[string]any)
+	if hostID, _ := state["host_id"].(string); hostID != "host-abc-123" {
+		t.Errorf("state.host_id=%q want %q", hostID, "host-abc-123")
+	}
+	if onlineAt, _ := state["online_at"].(string); onlineAt == "" {
+		t.Errorf("state.online_at empty: %+v", state)
 	}
 }
 

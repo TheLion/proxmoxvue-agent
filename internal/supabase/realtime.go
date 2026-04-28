@@ -135,6 +135,27 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 	}
 	dialCancel()
 
+	// Track presence: zonder een expliciet track-frame ziet iOS geen
+	// presence_join, ook niet als de join-config presence enabled heeft.
+	// Best-effort — als de write faalt, vangt de read-loop de dode conn op.
+	trackMsg := map[string]any{
+		"topic": topic,
+		"event": "presence",
+		"payload": map[string]any{
+			"type":  "presence",
+			"event": "track",
+			"payload": map[string]any{
+				"host_id":   hostID,
+				"online_at": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+		"ref":      nextRef(),
+		"join_ref": joinRef,
+	}
+	if err := writeJSON(ctx, conn, trackMsg); err != nil {
+		slog.Warn("realtime presence track failed", "err", err)
+	}
+
 	// Heartbeat-loop
 	hbCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
