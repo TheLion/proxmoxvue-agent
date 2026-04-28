@@ -155,11 +155,17 @@ func runRegister(args []string) {
 
 	fmt.Printf("registered host %s, config written to %s\n", result.HostID, *configPath)
 	fmt.Println()
-	fmt.Println("next: add your Proxmox API token to the config file:")
-	fmt.Println("  proxmox:")
-	fmt.Println("    api_url: https://<host>:8006")
-	fmt.Println("    api_token_id: user@realm!tokenid")
-	fmt.Println("    api_token_secret: <uuid>")
-	fmt.Println("    verify_tls: false")
-	fmt.Println("then: systemctl restart proxmoxvue-agent")
+	if cfg.Proxmox.APIURL == "" || cfg.Proxmox.APITokenSecret == "" {
+		fmt.Println("next: add your Proxmox API token to the config file:")
+		fmt.Println("  proxmox:")
+		fmt.Println("    api_url: https://<host>:8006")
+		fmt.Println("    api_token_id: user@realm!tokenid")
+		fmt.Println("    api_token_secret: <uuid>")
+		fmt.Println("    verify_tls: false")
+		fmt.Println("then: systemctl restart proxmoxvue-agent")
+	} else {
+		fmt.Println("Proxmox-config staat al klaar — herstart de agent:")
+		fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
+		fmt.Println("  of: proxmoxvue-agent --run  (foreground)")
+	}
 }
