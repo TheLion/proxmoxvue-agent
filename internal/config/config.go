@@ -7,7 +7,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,7 +51,26 @@ func (c ProxmoxConfig) String() string {
 }
 
 type AgentConfig struct {
-	PollIntervalSeconds int `yaml:"poll_interval_seconds,omitempty"`
+	PollIntervalSeconds int    `yaml:"poll_interval_seconds,omitempty"`
+	LogLevel            string `yaml:"log_level,omitempty"`
+}
+
+// ParseLogLevel mapt config-strings (case-insensitive) naar slog.Level.
+// Lege string defaultt naar info. Onbekende waarde levert een error op
+// zodat de caller fail-fast kan exit'en.
+func ParseLogLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid log_level %q (valid: debug, info, warn, error)", s)
+	}
 }
 
 func Save(path string, f File) error {

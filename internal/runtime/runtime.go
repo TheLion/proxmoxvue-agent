@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,7 +48,7 @@ func Start(ctx context.Context, configPath string) error {
 	if err := sb.Ping(ctx); err != nil {
 		return fmt.Errorf("supabase initial auth: %w", err)
 	}
-	log.Printf("agent started: host_id=%s proxmox=%s", cfg.Supabase.HostID, cfg.Proxmox.APIURL)
+	slog.Info("agent started", "host_id", cfg.Supabase.HostID, "proxmox", cfg.Proxmox.APIURL)
 
 	interval := defaultPollInterval
 	if cfg.Agent.PollIntervalSeconds > 0 {
@@ -77,7 +77,7 @@ func Start(ctx context.Context, configPath string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("agent stopping: %v", ctx.Err())
+			slog.Info("agent stopping", "reason", ctx.Err())
 			return nil
 		case <-ticker.C:
 			if err := pushOnce(ctx, pve, sb, cfg.Supabase.HostID); err != nil {
@@ -91,21 +91,21 @@ func Start(ctx context.Context, configPath string) error {
 
 func handleCommand(ctx context.Context, d *commands.Dispatcher, cmd supabase.Command) {
 	if err := d.Handle(ctx, cmd); err != nil {
-		log.Printf("command %d: %v", cmd.ID, err)
+		slog.Error("command handle failed", "id", cmd.ID, "err", err)
 	}
 }
 
 func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, hostID string) error {
 	resources, err := pve.ClusterResources(ctx)
 	if err != nil {
-		log.Printf("poll proxmox: %v", err)
+		slog.Error("poll proxmox failed", "err", err)
 		return err
 	}
 	if err := sb.PushSnapshot(ctx, hostID, resources); err != nil {
-		log.Printf("push snapshot: %v", err)
+		slog.Error("push snapshot failed", "err", err)
 		return err
 	}
-	log.Printf("snapshot pushed (%d bytes)", len(resources))
+	slog.Info("snapshot pushed", "bytes", len(resources))
 	return nil
 }
 

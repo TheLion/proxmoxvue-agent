@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
@@ -57,6 +57,7 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	//    er iets niet is gelukt i.p.v. hem eeuwig op pending te laten.
 	if !cmd.ExpiresAt.IsZero() && time.Now().After(cmd.ExpiresAt) {
 		if ok, err := d.store.ClaimCommand(ctx, cmd.ID); err == nil && ok {
+			slog.Info("command expired", "id", cmd.ID, "kind", cmd.Kind)
 			return d.store.CompleteCommand(ctx, cmd.ID, "expired", map[string]any{"reason": "ttl"})
 		}
 		return nil
@@ -71,6 +72,7 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	if !ok {
 		return nil
 	}
+	slog.Info("command claimed", "id", cmd.ID, "kind", cmd.Kind)
 
 	// 3. Valideer action + payload. Onbekende kind of kapotte payload
 	//    markeren we expliciet als failed — zo eindigt geen row eeuwig
@@ -96,6 +98,7 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	if err != nil {
 		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": err.Error()})
 	}
+	slog.Info("command dispatched", "id", cmd.ID, "upid", upid, "node", p.Node, "vmid", p.VMID)
 
 	// 5. Wacht tot de task klaar is (of timeout).
 	st, err := d.pve.AwaitTaskCompletion(ctx, p.Node, upid, d.ActionTimeout)
@@ -110,8 +113,9 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 		status = "failed"
 	}
 	if err := d.store.CompleteCommand(ctx, cmd.ID, status, result); err != nil {
-		log.Printf("dispatcher: complete %d: %v", cmd.ID, err)
+		slog.Error("complete command failed", "id", cmd.ID, "err", err)
 		return err
 	}
+	slog.Info("command done", "id", cmd.ID, "status", status, "exitstatus", st.ExitStatus)
 	return nil
 }

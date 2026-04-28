@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -67,6 +68,21 @@ func runAgent(args []string) {
 		os.Exit(2)
 	}
 
+	// Init slog handler op basis van agent.log_level. Config kan ontbreken
+	// of corrupt zijn — die fout komt straks uit runtime.Start; voor logging
+	// vallen we hier terug op INFO. Een wel-aanwezige maar ongeldige waarde
+	// is fail-fast (anders verbergen we user-fouten).
+	level := slog.LevelInfo
+	if cfg, err := config.Load(*configPath); err == nil {
+		l, err := config.ParseLogLevel(cfg.Agent.LogLevel)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		level = l
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -104,13 +120,34 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	cfg := config.File{
-		Supabase: config.SupabaseConfig{
-			ProjectRef:   result.ProjectRef,
-			HostID:       result.HostID,
-			RefreshToken: result.RefreshToken,
-		},
+	// Non-destructive merge: laad bestaande config (proxmox + agent
+	// blijven zoals ze waren), validate huidige log_level, vervang
+	// alleen het Supabase-block. Bij parse-fout op een bestaande
+	// config: fail-fast — anders verlies je gebruiker-data door
+	// een typo te overschrijven.
+	var cfg config.File
+	if existing, loadErr := config.Load(*configPath); loadErr == nil {
+		cfg = existing
+		if cfg.Agent.LogLevel != "" {
+			if _, vErr := config.ParseLogLevel(cfg.Agent.LogLevel); vErr != nil {
+				fmt.Fprintf(os.Stderr, "config bevat ongeldige %v\n", vErr)
+				os.Exit(1)
+			}
+		}
+	} else if !errors.Is(loadErr, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "failed to read existing config: %v\n", loadErr)
+		os.Exit(1)
 	}
+
+	cfg.Supabase = config.SupabaseConfig{
+		ProjectRef:   result.ProjectRef,
+		HostID:       result.HostID,
+		RefreshToken: result.RefreshToken,
+	}
+	if cfg.Agent.LogLevel == "" {
+		cfg.Agent.LogLevel = "info"
+	}
+
 	if err := config.Save(*configPath, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
 		os.Exit(1)

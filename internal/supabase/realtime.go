@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -38,7 +38,7 @@ func (c *Client) runSubscription(ctx context.Context, hostID string, out chan<- 
 			return
 		}
 		if err := c.subscribeOnce(ctx, hostID, out); err != nil {
-			log.Printf("realtime: subscription loop: %v", err)
+			slog.Warn("realtime subscription rejected", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -168,7 +168,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 			Payload json.RawMessage `json:"payload"`
 		}
 		if err := json.Unmarshal(raw, &frame); err != nil {
-			log.Printf("realtime: bad frame: %v", err)
+			slog.Debug("realtime bad frame", "err", err)
 			continue
 		}
 		if frame.Event != "postgres_changes" {
@@ -188,7 +188,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 		}
 		var cmd Command
 		if err := json.Unmarshal(p.Data.Record, &cmd); err != nil {
-			log.Printf("realtime: decode record: %v", err)
+			slog.Warn("realtime decode record failed", "err", err)
 			continue
 		}
 		select {
