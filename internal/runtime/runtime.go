@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -109,14 +110,64 @@ func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Cli
 		slog.Error("command handle failed", "id", cmd.ID, "err", err)
 		return
 	}
-	// Direct na een afgehandeld command een verse snapshot pushen, zodat de
-	// iOS cloud-read-pad de nieuwe guest-state binnen ~1s ziet i.p.v. te
-	// wachten op de volgende 30s-tick. Bij expired/already-claimed cycles is
-	// dit redundant, maar de extra Proxmox+Supabase-call is goedkoop genoeg
-	// om het ongeconditioneerd te doen.
+	// /cluster/resources is eventually consistent — empirisch 1-7s achter op
+	// task-completion. Direct pushen na CompleteCommand bevat dus typisch nog
+	// de oude state. Wacht actief tot Proxmox' aggregate-cache de nieuwe state
+	// reflecteert, dan pushen. Bij timeout pushen we sowieso (UX-degradatie
+	// naar de routine 30s-tick, geen correctness-issue).
+	waitForClusterStateMatch(ctx, pve, cmd)
 	if err := pushOnce(ctx, pve, sb, hostID); err != nil {
 		slog.Warn("post-action snapshot push failed", "id", cmd.ID, "err", err)
 	}
+}
+
+// waitForClusterStateMatch polt /cluster/resources tot de target guest in de
+// verwachte status staat, of tot de per-kind timeout verstrijkt. No-op voor
+// commands met onbekende kind of onparseerbaar payload.
+func waitForClusterStateMatch(ctx context.Context, pve *proxmox.Client, cmd supabase.Command) {
+	expected, timeout, ok := commands.ExpectedStateFor(cmd.Kind)
+	if !ok {
+		return
+	}
+	ref, ok := commands.ParseGuestRef(cmd)
+	if !ok {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+	for time.Now().Before(deadline) {
+		resources, err := pve.ClusterResources(ctx)
+		if err == nil && hasGuestState(resources, ref.VMID, expected) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+	slog.Info("post-action state-match timeout — pushing current state", "id", cmd.ID, "vmid", ref.VMID, "expected", expected)
+}
+
+// hasGuestState parseert de raw /cluster/resources payload en kijkt of de
+// guest met `vmid` op `expected`-status staat. Het payload-array bevat
+// nodes/qemu/lxc/storage/network entries met variable velden — een minimale
+// `[{vmid, status}]` decode is genoeg.
+func hasGuestState(resources json.RawMessage, vmid int, expected string) bool {
+	var entries []struct {
+		VMID   int    `json:"vmid"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(resources, &entries); err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.VMID == vmid && e.Status == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func handleReadCommand(ctx context.Context, d *commands.ReadDispatcher, cmd supabase.ReadCommand) {

@@ -47,6 +47,67 @@ type commandPayload struct {
 	VMID      int    `json:"vmid"`
 }
 
+// GuestRef is de geparsete payload van een command — wat hebben we nodig om
+// post-action te wachten op de cluster-state-update en daarna een snapshot
+// te pushen die de nieuwe state bevat.
+type GuestRef struct {
+	GuestKind proxmox.GuestKind
+	Node      string
+	VMID      int
+}
+
+// ParseGuestRef extraheert de guest-coördinaten uit een Command. Returnt
+// (_, false) bij onbekende guest_kind, ontbrekende velden of decode-error;
+// de caller skipt de wait dan netjes.
+func ParseGuestRef(cmd supabase.Command) (GuestRef, bool) {
+	var p commandPayload
+	if err := json.Unmarshal(cmd.Payload, &p); err != nil {
+		return GuestRef{}, false
+	}
+	kind := proxmox.GuestKind(p.GuestKind)
+	if kind != proxmox.GuestKindQEMU && kind != proxmox.GuestKindLXC {
+		return GuestRef{}, false
+	}
+	if p.Node == "" || p.VMID <= 0 {
+		return GuestRef{}, false
+	}
+	return GuestRef{GuestKind: kind, Node: p.Node, VMID: p.VMID}, true
+}
+
+// stateExpectation beschrijft wat agent na CompleteCommand moet zien in
+// /cluster/resources voor een gegeven command-kind, plus hoe lang we
+// daarop willen wachten voordat we sowieso de huidige (eventueel nog
+// stale) snapshot pushen.
+type stateExpectation struct {
+	expected string
+	timeout  time.Duration
+}
+
+// expectedStates mapt cmd.Kind naar (expected status, max wait). Status-
+// acties hebben 10s ruim — Proxmox' /cluster/resources liep in metingen
+// 1-7s achter op task-completion, niet afhankelijk van VM-grootte. Voor
+// toekomstige cloud-write acties (vm-create, delete, snapshot-rollback)
+// een eigen entry toevoegen met passende timeout.
+var expectedStates = map[string]stateExpectation{
+	"start":    {expected: "running", timeout: 10 * time.Second},
+	"resume":   {expected: "running", timeout: 10 * time.Second},
+	"reboot":   {expected: "running", timeout: 10 * time.Second},
+	"stop":     {expected: "stopped", timeout: 10 * time.Second},
+	"shutdown": {expected: "stopped", timeout: 10 * time.Second},
+	"suspend":  {expected: "paused", timeout: 10 * time.Second},
+}
+
+// ExpectedStateFor retourneert wat agent moet zien in /cluster/resources
+// na een geslaagd command, plus hoe lang te wachten. Returnt (_, false)
+// voor onbekende kinds — caller skipt de wait dan.
+func ExpectedStateFor(kind string) (expected string, timeout time.Duration, ok bool) {
+	e, found := expectedStates[kind]
+	if !found {
+		return "", 0, false
+	}
+	return e.expected, e.timeout, true
+}
+
 // Handle verwerkt één command: claim → dispatch → await → complete.
 // Proxmox-fouten leiden tot een completed command met status=failed.
 // De enige error die naar boven bubbelt is wanneer claim/complete zelf
