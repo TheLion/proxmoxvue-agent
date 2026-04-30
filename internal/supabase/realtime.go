@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -86,7 +87,16 @@ func (c *Client) runSubscription(ctx context.Context, hostID, table string, out 
 			return
 		}
 		if err := c.subscribeOnce(ctx, hostID, table, out); err != nil {
-			slog.Warn("realtime subscription rejected", "table", table, "err", err)
+			// Idle-disconnect/EOF is normaal voor lange WS — server-side
+			// keep-alive timeout of netwerktransitie. Reconnect via backoff
+			// is voldoende; geen reden om elke disconnect te WARN-loggen.
+			// Echte rejections (Unauthorized, channel-policy) blijven WARN.
+			msg := err.Error()
+			if strings.Contains(msg, "EOF") || strings.Contains(msg, "ws read") {
+				slog.Debug("realtime subscription disconnected", "table", table, "err", err)
+			} else {
+				slog.Warn("realtime subscription rejected", "table", table, "err", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
