@@ -81,6 +81,34 @@ func (c *Client) ClusterResources(ctx context.Context) (json.RawMessage, error) 
 	return wrapper.Data, nil
 }
 
+// GetRaw doet een generieke GET op een willekeurig Proxmox-pad en geeft de
+// volledige response-body terug. Gebruikt door de read-RPC dispatcher; alle
+// path-validatie gebeurt daar (whitelist), niet hier — deze functie is een
+// dumme passthrough.
+func (c *Client) GetRaw(ctx context.Context, path string) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	return body, nil
+}
+
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIURL+path, nil)
 	if err != nil {

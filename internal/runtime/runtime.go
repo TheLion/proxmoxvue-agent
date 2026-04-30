@@ -63,7 +63,19 @@ func Start(ctx context.Context, configPath string) error {
 	}
 	go func() {
 		for cmd := range cmdCh {
-			go handleCommand(ctx, dispatcher, cmd)
+			go handleCommand(ctx, dispatcher, pve, sb, cfg.Supabase.HostID, cmd)
+		}
+	}()
+
+	// === Read-RPC pipeline (cluster overview/details on-demand). ===
+	readDispatcher := commands.NewReadDispatcher(pve, sb)
+	readCh, err := sb.SubscribeReadCommands(ctx, cfg.Supabase.HostID)
+	if err != nil {
+		return fmt.Errorf("subscribe read_commands: %w", err)
+	}
+	go func() {
+		for cmd := range readCh {
+			go handleReadCommand(ctx, readDispatcher, cmd)
 		}
 	}()
 
@@ -89,9 +101,24 @@ func Start(ctx context.Context, configPath string) error {
 	}
 }
 
-func handleCommand(ctx context.Context, d *commands.Dispatcher, cmd supabase.Command) {
+func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Client, sb *supabase.Client, hostID string, cmd supabase.Command) {
 	if err := d.Handle(ctx, cmd); err != nil {
 		slog.Error("command handle failed", "id", cmd.ID, "err", err)
+		return
+	}
+	// Direct na een afgehandeld command een verse snapshot pushen, zodat de
+	// iOS cloud-read-pad de nieuwe guest-state binnen ~1s ziet i.p.v. te
+	// wachten op de volgende 30s-tick. Bij expired/already-claimed cycles is
+	// dit redundant, maar de extra Proxmox+Supabase-call is goedkoop genoeg
+	// om het ongeconditioneerd te doen.
+	if err := pushOnce(ctx, pve, sb, hostID); err != nil {
+		slog.Warn("post-action snapshot push failed", "id", cmd.ID, "err", err)
+	}
+}
+
+func handleReadCommand(ctx context.Context, d *commands.ReadDispatcher, cmd supabase.ReadCommand) {
+	if err := d.Handle(ctx, cmd); err != nil {
+		slog.Error("read_command handle failed", "id", cmd.ID, "err", err)
 	}
 }
 

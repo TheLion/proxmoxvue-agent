@@ -22,23 +22,71 @@ const (
 // gefilterd op host_id. Retourneert een channel met Command-events.
 // De goroutine blijft draaien tot ctx cancelt; reconnects zijn intern.
 func (c *Client) SubscribeCommands(ctx context.Context, hostID string) (<-chan Command, error) {
-	if c.realtimeURL == "" {
-		c.realtimeURL = fmt.Sprintf("wss://%s.supabase.co/realtime/v1/websocket", c.projectRef)
-	}
 	out := make(chan Command, 16)
-	go c.runSubscription(ctx, hostID, out)
+	raw := c.subscribeTable(ctx, hostID, "commands")
+	go func() {
+		defer close(out)
+		for r := range raw {
+			var cmd Command
+			if err := json.Unmarshal(r, &cmd); err != nil {
+				slog.Warn("realtime decode command failed", "err", err)
+				continue
+			}
+			select {
+			case out <- cmd:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	return out, nil
 }
 
-func (c *Client) runSubscription(ctx context.Context, hostID string, out chan<- Command) {
+// SubscribeReadCommands is het read-RPC equivalent van SubscribeCommands.
+// Aparte channel zodat de read-dispatcher onafhankelijk van de write-dispatcher
+// kan draaien — failures aan één kant raken de andere niet.
+func (c *Client) SubscribeReadCommands(ctx context.Context, hostID string) (<-chan ReadCommand, error) {
+	out := make(chan ReadCommand, 16)
+	raw := c.subscribeTable(ctx, hostID, "read_commands")
+	go func() {
+		defer close(out)
+		for r := range raw {
+			var cmd ReadCommand
+			if err := json.Unmarshal(r, &cmd); err != nil {
+				slog.Warn("realtime decode read_command failed", "err", err)
+				continue
+			}
+			select {
+			case out <- cmd:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// subscribeTable opent een Realtime-WS voor INSERTs op de gegeven tabel,
+// gefilterd op host_id, en pusht raw record-bytes naar het returnerende
+// channel. Reconnects zijn intern; channel sluit bij ctx-cancel.
+func (c *Client) subscribeTable(ctx context.Context, hostID, table string) <-chan json.RawMessage {
+	if c.realtimeURL == "" {
+		c.realtimeURL = fmt.Sprintf("wss://%s.supabase.co/realtime/v1/websocket", c.projectRef)
+	}
+	out := make(chan json.RawMessage, 16)
+	go c.runSubscription(ctx, hostID, table, out)
+	return out
+}
+
+func (c *Client) runSubscription(ctx context.Context, hostID, table string, out chan<- json.RawMessage) {
 	defer close(out)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := c.subscribeOnce(ctx, hostID, out); err != nil {
-			slog.Warn("realtime subscription rejected", "err", err)
+		if err := c.subscribeOnce(ctx, hostID, table, out); err != nil {
+			slog.Warn("realtime subscription rejected", "table", table, "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -51,7 +99,7 @@ func (c *Client) runSubscription(ctx context.Context, hostID string, out chan<- 
 	}
 }
 
-func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Command) error {
+func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out chan<- json.RawMessage) error {
 	token, err := c.access(ctx)
 	if err != nil {
 		return fmt.Errorf("get access token: %w", err)
@@ -73,7 +121,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "bye")
 
-	topic := fmt.Sprintf("realtime:commands:%s", hostID)
+	topic := fmt.Sprintf("realtime:%s:%s", table, hostID)
 	var ref int64
 	nextRef := func() string { return strconv.FormatInt(atomic.AddInt64(&ref, 1), 10) }
 
@@ -87,7 +135,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 					{
 						"event":  "INSERT",
 						"schema": "public",
-						"table":  "commands",
+						"table":  table,
 						"filter": "host_id=eq." + hostID,
 					},
 				},
@@ -207,13 +255,8 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID string, out chan<- Co
 		if p.Data.Type != "INSERT" {
 			continue
 		}
-		var cmd Command
-		if err := json.Unmarshal(p.Data.Record, &cmd); err != nil {
-			slog.Warn("realtime decode record failed", "err", err)
-			continue
-		}
 		select {
-		case out <- cmd:
+		case out <- p.Data.Record:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
