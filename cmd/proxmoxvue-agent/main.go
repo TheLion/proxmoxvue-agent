@@ -21,6 +21,13 @@ const (
 	defaultConfigPath = "/etc/proxmoxvue-agent/config.yml"
 )
 
+// version wordt geinjecteerd via ldflags bij release-builds:
+//
+//	go build -ldflags="-X main.version=$(git describe --tags --always --dirty)" ...
+//
+// Default "dev" voor `go run` en niet-build-script-builds.
+var version = "dev"
+
 // exitRevoked signals systemd that this failure is permanent for the
 // current session — re-enrollment is required. systemd's Restart=
 // configuration can exclude this code so we don't loop.
@@ -38,7 +45,7 @@ func main() {
 	case "--run", "run":
 		runAgent(os.Args[2:])
 	case "--version", "version":
-		fmt.Println("proxmoxvue-agent dev")
+		fmt.Println("proxmoxvue-agent", version)
 	case "--help", "-h", "help":
 		printUsage()
 	default:
@@ -86,7 +93,7 @@ func runAgent(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	err := runtime.Start(ctx, *configPath)
+	err := runtime.Start(ctx, *configPath, version)
 	if errors.Is(err, supabase.ErrRefreshRevoked) {
 		fmt.Fprintln(os.Stderr, "supabase session revoked — re-enroll with --register")
 		os.Exit(exitRevoked)

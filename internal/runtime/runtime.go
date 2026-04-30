@@ -22,7 +22,10 @@ const defaultPollInterval = 30 * time.Second
 // Start runs until ctx is cancelled. Returns ErrRefreshRevoked if the
 // Supabase session was revoked — caller should exit with a distinct
 // code so systemd's restart policy doesn't hammer a dead session.
-func Start(ctx context.Context, configPath string) error {
+//
+// `version` wordt gelogd bij startup zodat een journalctl-grep meteen
+// laat zien welke build draait (geinjecteerd via ldflags in release-builds).
+func Start(ctx context.Context, configPath, version string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -48,7 +51,7 @@ func Start(ctx context.Context, configPath string) error {
 	if err := sb.Ping(ctx); err != nil {
 		return fmt.Errorf("supabase initial auth: %w", err)
 	}
-	slog.Info("agent started", "host_id", cfg.Supabase.HostID, "proxmox", cfg.Proxmox.APIURL)
+	slog.Info("agent started", "version", version, "host_id", cfg.Supabase.HostID, "proxmox", cfg.Proxmox.APIURL)
 
 	interval := defaultPollInterval
 	if cfg.Agent.PollIntervalSeconds > 0 {
