@@ -132,7 +132,9 @@ func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, hos
 		slog.Error("push snapshot failed", "err", err)
 		return err
 	}
-	slog.Info("snapshot pushed", "bytes", len(resources))
+	// DEBUG: routine 30s-pushes vullen anders het log onder de read_command-
+	// regels die je tijdens debuggen wel wil zien. Push failures blijven ERROR.
+	slog.Debug("snapshot pushed", "bytes", len(resources))
 	return nil
 }
 
