@@ -29,7 +29,10 @@ type Dispatcher struct {
 	store CommandStore
 
 	// ActionTimeout begrenst hoe lang AwaitTaskCompletion mag doorpolen.
-	// Power-acties zijn typisch <5s; 30s komt overeen met de iOS default.
+	// Power-acties zijn typisch <5s, maar `shutdown` met een traag-reagerend
+	// guest-OS kan 1-3 min duren voordat Proxmox de task als done meldt. 30s
+	// was te krap; 5 min dekt ook trage shutdowns zonder de UX te frustreren
+	// (iOS toont eigen spinner-state) (#1419).
 	ActionTimeout time.Duration
 }
 
@@ -37,7 +40,7 @@ func New(pve ProxmoxActor, store CommandStore) *Dispatcher {
 	return &Dispatcher{
 		pve:           pve,
 		store:         store,
-		ActionTimeout: 30 * time.Second,
+		ActionTimeout: 5 * time.Minute,
 	}
 }
 
