@@ -18,12 +18,14 @@ type Options struct {
 }
 
 type Result struct {
+	ClusterID    string
 	HostID       string
 	RefreshToken string
 	ProjectRef   string
 }
 
 type response struct {
+	ClusterID    string `json:"cluster_id"`
 	HostID       string `json:"host_id"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -71,6 +73,7 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	return &Result{
+		ClusterID:    parsed.ClusterID,
 		HostID:       parsed.HostID,
 		RefreshToken: parsed.RefreshToken,
 		ProjectRef:   parsed.ProjectRef,

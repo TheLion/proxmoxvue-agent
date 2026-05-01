@@ -52,7 +52,7 @@ func Start(ctx context.Context, configPath, version string) error {
 	if err := sb.Ping(ctx); err != nil {
 		return fmt.Errorf("supabase initial auth: %w", err)
 	}
-	slog.Info("agent started", "version", version, "host_id", cfg.Supabase.HostID, "proxmox", cfg.Proxmox.APIURL)
+	slog.Info("agent started", "version", version, "cluster_id", cfg.Supabase.ClusterID, "proxmox", cfg.Proxmox.APIURL)
 
 	interval := defaultPollInterval
 	if cfg.Agent.PollIntervalSeconds > 0 {
@@ -61,19 +61,19 @@ func Start(ctx context.Context, configPath, version string) error {
 
 	// === Command pipeline (naast de status-push-ticker). ===
 	dispatcher := commands.New(pve, sb)
-	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.HostID)
+	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID)
 	if err != nil {
 		return fmt.Errorf("subscribe commands: %w", err)
 	}
 	go func() {
 		for cmd := range cmdCh {
-			go handleCommand(ctx, dispatcher, pve, sb, cfg.Supabase.HostID, cmd)
+			go handleCommand(ctx, dispatcher, pve, sb, cfg.Supabase.ClusterID, cmd)
 		}
 	}()
 
 	// === Read-RPC pipeline (cluster overview/details on-demand). ===
 	readDispatcher := commands.NewReadDispatcher(pve, sb)
-	readCh, err := sb.SubscribeReadCommands(ctx, cfg.Supabase.HostID)
+	readCh, err := sb.SubscribeReadCommands(ctx, cfg.Supabase.ClusterID)
 	if err != nil {
 		return fmt.Errorf("subscribe read_commands: %w", err)
 	}
@@ -83,9 +83,9 @@ func Start(ctx context.Context, configPath, version string) error {
 		}
 	}()
 
-	// First push happens immediately so hosts.last_seen_at becomes
-	// non-null at boot without waiting a full tick.
-	pushOnce(ctx, pve, sb, cfg.Supabase.HostID)
+	// First push happens immediately so de cluster meteen na boot een
+	// snapshot heeft, zonder een volle tick te wachten.
+	pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -96,7 +96,7 @@ func Start(ctx context.Context, configPath, version string) error {
 			slog.Info("agent stopping", "reason", ctx.Err())
 			return nil
 		case <-ticker.C:
-			if err := pushOnce(ctx, pve, sb, cfg.Supabase.HostID); err != nil {
+			if err := pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID); err != nil {
 				if errors.Is(err, supabase.ErrRefreshRevoked) {
 					return err
 				}
@@ -105,7 +105,7 @@ func Start(ctx context.Context, configPath, version string) error {
 	}
 }
 
-func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Client, sb *supabase.Client, hostID string, cmd supabase.Command) {
+func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Client, sb *supabase.Client, clusterID string, cmd supabase.Command) {
 	if err := d.Handle(ctx, cmd); err != nil {
 		slog.Error("command handle failed", "id", cmd.ID, "err", err)
 		return
@@ -116,7 +116,7 @@ func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Cli
 	// reflecteert, dan pushen. Bij timeout pushen we sowieso (UX-degradatie
 	// naar de routine 30s-tick, geen correctness-issue).
 	waitForClusterStateMatch(ctx, pve, cmd)
-	if err := pushOnce(ctx, pve, sb, hostID); err != nil {
+	if err := pushOnce(ctx, pve, sb, clusterID); err != nil {
 		slog.Warn("post-action snapshot push failed", "id", cmd.ID, "err", err)
 	}
 }
@@ -176,13 +176,13 @@ func handleReadCommand(ctx context.Context, d *commands.ReadDispatcher, cmd supa
 	}
 }
 
-func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, hostID string) error {
+func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clusterID string) error {
 	resources, err := pve.ClusterResources(ctx)
 	if err != nil {
 		slog.Error("poll proxmox failed", "err", err)
 		return err
 	}
-	if err := sb.PushSnapshot(ctx, hostID, resources); err != nil {
+	if err := sb.PushSnapshot(ctx, clusterID, resources); err != nil {
 		slog.Error("push snapshot failed", "err", err)
 		return err
 	}
@@ -193,7 +193,7 @@ func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, hos
 }
 
 func validate(cfg config.File) error {
-	if cfg.Supabase.ProjectRef == "" || cfg.Supabase.HostID == "" || cfg.Supabase.RefreshToken == "" {
+	if cfg.Supabase.ProjectRef == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
 		return fmt.Errorf("supabase section incomplete (run --register first)")
 	}
 	pvCfg := proxmox.Config{

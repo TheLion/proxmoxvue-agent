@@ -148,7 +148,7 @@ func runRegister(args []string) {
 
 	cfg.Supabase = config.SupabaseConfig{
 		ProjectRef:   result.ProjectRef,
-		HostID:       result.HostID,
+		ClusterID:    result.ClusterID,
 		RefreshToken: result.RefreshToken,
 	}
 	if cfg.Agent.LogLevel == "" {
@@ -160,7 +160,7 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("registered host %s, config written to %s\n", result.HostID, *configPath)
+	fmt.Printf("registered cluster %s (host %s), config written to %s\n", result.ClusterID, result.HostID, *configPath)
 	fmt.Println()
 	if cfg.Proxmox.APIURL == "" || cfg.Proxmox.APITokenSecret == "" {
 		fmt.Println("next: add your Proxmox API token to the config file:")

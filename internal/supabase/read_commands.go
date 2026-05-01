@@ -12,7 +12,7 @@ import (
 // whitelist; deze struct doet zelf geen check.
 type ReadCommand struct {
 	ID        int64           `json:"id"`
-	HostID    string          `json:"host_id"`
+	HostID    string          `json:"host_id,omitempty"`
 	Endpoint  string          `json:"endpoint"`
 	Params    json.RawMessage `json:"params"`
 	Status    string          `json:"status"`

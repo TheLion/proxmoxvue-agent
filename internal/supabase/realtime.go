@@ -20,11 +20,11 @@ const (
 )
 
 // SubscribeCommands opent een Realtime-kanaal voor INSERTs op public.commands
-// gefilterd op host_id. Retourneert een channel met Command-events.
+// gefilterd op cluster_id. Retourneert een channel met Command-events.
 // De goroutine blijft draaien tot ctx cancelt; reconnects zijn intern.
-func (c *Client) SubscribeCommands(ctx context.Context, hostID string) (<-chan Command, error) {
+func (c *Client) SubscribeCommands(ctx context.Context, clusterID string) (<-chan Command, error) {
 	out := make(chan Command, 16)
-	raw := c.subscribeTable(ctx, hostID, "commands")
+	raw := c.subscribeTable(ctx, clusterID, "commands")
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -46,9 +46,9 @@ func (c *Client) SubscribeCommands(ctx context.Context, hostID string) (<-chan C
 // SubscribeReadCommands is het read-RPC equivalent van SubscribeCommands.
 // Aparte channel zodat de read-dispatcher onafhankelijk van de write-dispatcher
 // kan draaien — failures aan één kant raken de andere niet.
-func (c *Client) SubscribeReadCommands(ctx context.Context, hostID string) (<-chan ReadCommand, error) {
+func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string) (<-chan ReadCommand, error) {
 	out := make(chan ReadCommand, 16)
-	raw := c.subscribeTable(ctx, hostID, "read_commands")
+	raw := c.subscribeTable(ctx, clusterID, "read_commands")
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -68,25 +68,25 @@ func (c *Client) SubscribeReadCommands(ctx context.Context, hostID string) (<-ch
 }
 
 // subscribeTable opent een Realtime-WS voor INSERTs op de gegeven tabel,
-// gefilterd op host_id, en pusht raw record-bytes naar het returnerende
+// gefilterd op cluster_id, en pusht raw record-bytes naar het returnerende
 // channel. Reconnects zijn intern; channel sluit bij ctx-cancel.
-func (c *Client) subscribeTable(ctx context.Context, hostID, table string) <-chan json.RawMessage {
+func (c *Client) subscribeTable(ctx context.Context, clusterID, table string) <-chan json.RawMessage {
 	if c.realtimeURL == "" {
 		c.realtimeURL = fmt.Sprintf("wss://%s.supabase.co/realtime/v1/websocket", c.projectRef)
 	}
 	out := make(chan json.RawMessage, 16)
-	go c.runSubscription(ctx, hostID, table, out)
+	go c.runSubscription(ctx, clusterID, table, out)
 	return out
 }
 
-func (c *Client) runSubscription(ctx context.Context, hostID, table string, out chan<- json.RawMessage) {
+func (c *Client) runSubscription(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) {
 	defer close(out)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := c.subscribeOnce(ctx, hostID, table, out); err != nil {
+		if err := c.subscribeOnce(ctx, clusterID, table, out); err != nil {
 			// Idle-disconnect/EOF is normaal voor lange WS — server-side
 			// keep-alive timeout of netwerktransitie. Reconnect via backoff
 			// is voldoende; geen reden om elke disconnect te WARN-loggen.
@@ -109,7 +109,7 @@ func (c *Client) runSubscription(ctx context.Context, hostID, table string, out 
 	}
 }
 
-func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out chan<- json.RawMessage) error {
+func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) error {
 	token, err := c.access(ctx)
 	if err != nil {
 		return fmt.Errorf("get access token: %w", err)
@@ -131,7 +131,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "bye")
 
-	topic := fmt.Sprintf("realtime:%s:%s", table, hostID)
+	topic := fmt.Sprintf("realtime:%s:%s", table, clusterID)
 	var ref int64
 	nextRef := func() string { return strconv.FormatInt(atomic.AddInt64(&ref, 1), 10) }
 
@@ -146,7 +146,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 						"event":  "INSERT",
 						"schema": "public",
 						"table":  table,
-						"filter": "host_id=eq." + hostID,
+						"filter": "cluster_id=eq." + clusterID,
 					},
 				},
 				// Presence aan zodat iOS-subscribers realtime zien of de agent
@@ -155,7 +155,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 				// en mist WS-only disconnects).
 				"presence": map[string]any{
 					"enabled": true,
-					"key":     hostID,
+					"key":     clusterID,
 				},
 				"private": true,
 			},
@@ -203,8 +203,8 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 			"type":  "presence",
 			"event": "track",
 			"payload": map[string]any{
-				"host_id":   hostID,
-				"online_at": time.Now().UTC().Format(time.RFC3339),
+				"cluster_id": clusterID,
+				"online_at":  time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 		"ref":      nextRef(),

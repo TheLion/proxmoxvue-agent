@@ -22,7 +22,7 @@ type File struct {
 
 type SupabaseConfig struct {
 	ProjectRef   string `yaml:"project_ref"`
-	HostID       string `yaml:"host_id"`
+	ClusterID    string `yaml:"cluster_id"`
 	RefreshToken string `yaml:"refresh_token"`
 }
 
@@ -31,7 +31,7 @@ func (c SupabaseConfig) String() string {
 	if c.RefreshToken != "" {
 		masked = "[REDACTED]"
 	}
-	return fmt.Sprintf("{ProjectRef:%s HostID:%s RefreshToken:%s}", c.ProjectRef, c.HostID, masked)
+	return fmt.Sprintf("{ProjectRef:%s ClusterID:%s RefreshToken:%s}", c.ProjectRef, c.ClusterID, masked)
 }
 
 type ProxmoxConfig struct {

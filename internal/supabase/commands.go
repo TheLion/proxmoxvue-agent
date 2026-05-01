@@ -11,9 +11,12 @@ import (
 )
 
 // Command is één rij uit public.commands zoals de agent die nodig heeft.
+// HostID is informatief (welke node-context iOS bedoelde); cluster_id is
+// de claim-key en zit niet in deze struct want de agent kent z'n cluster
+// al via config.
 type Command struct {
 	ID        int64           `json:"id"`
-	HostID    string          `json:"host_id"`
+	HostID    string          `json:"host_id,omitempty"`
 	Kind      string          `json:"kind"`
 	Payload   json.RawMessage `json:"payload"`
 	Status    string          `json:"status"`

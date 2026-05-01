@@ -11,7 +11,7 @@ import (
 func TestSupabaseConfigStringRedactsToken(t *testing.T) {
 	cfg := SupabaseConfig{
 		ProjectRef:   "abc",
-		HostID:       "host-uuid",
+		ClusterID:    "cluster-uuid",
 		RefreshToken: "super-secret-token-xyz",
 	}
 	rendered := fmt.Sprintf("%+v", cfg)
