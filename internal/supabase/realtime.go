@@ -218,7 +218,11 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		slog.Warn("realtime presence track failed", "err", err)
 	}
 
-	// Heartbeat-loop
+	// Heartbeat-loop met ack-tracking. hbSent telt verzonden hb's, hbAcked
+	// telt phx_reply's op topic="phoenix". Loopt sent steeds verder voor op
+	// acked, dan is de WS dood maar (nog) niet gedropped — silent death die
+	// we anders pas merken bij de eerstvolgende read error.
+	var hbSent, hbAcked atomic.Int64
 	hbCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -229,12 +233,23 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				_ = writeJSON(hbCtx, conn, map[string]any{
+				if err := writeJSON(hbCtx, conn, map[string]any{
 					"topic":   heartbeatTopic,
 					"event":   "heartbeat",
 					"payload": map[string]any{},
 					"ref":     nextRef(),
-				})
+				}); err != nil {
+					return
+				}
+				sent := hbSent.Add(1)
+				acked := hbAcked.Load()
+				if lag := sent - acked; lag >= 2 {
+					slog.Warn("realtime heartbeat-ack lag",
+						"table", table, "sent", sent, "acked", acked, "lag", lag)
+				} else {
+					slog.Debug("realtime heartbeat",
+						"table", table, "sent", sent, "acked", acked)
+				}
 			}
 		}
 	}()
@@ -252,6 +267,11 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		}
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			slog.Debug("realtime bad frame", "err", err)
+			continue
+		}
+		// Heartbeat-ack: phx_reply op topic="phoenix" hoort bij onze hb's.
+		if frame.Event == "phx_reply" && frame.Topic == heartbeatTopic {
+			hbAcked.Add(1)
 			continue
 		}
 		if frame.Event != "postgres_changes" {
