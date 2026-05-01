@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -98,10 +99,13 @@ func (c *Client) runSubscription(ctx context.Context, clusterID, table string, o
 				slog.Warn("realtime subscription rejected", "table", table, "err", err)
 			}
 		}
+		// Jitter (±25%) zodat agents van verschillende users niet
+		// gesynchroniseerd reconnecten na een Supabase-storing.
+		jitter := time.Duration(rand.Int64N(int64(backoff/2))) - backoff/4
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(backoff + jitter):
 		}
 		if backoff < 30*time.Second {
 			backoff *= 2
