@@ -139,19 +139,59 @@ func TestSaveLoadRoundtrip_PreservesLoggingFields(t *testing.T) {
 	}
 }
 
-func TestSave_WritesHeaderComments(t *testing.T) {
+func TestSave_WritesInlineComments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	if err := Save(path, File{}); err != nil {
+	cfg := File{
+		Supabase: SupabaseConfig{ProjectRef: "ref", ClusterID: "uuid", RefreshToken: "x"},
+		Agent:    AgentConfig{LogLevel: "info", PollIntervalSeconds: 30},
+	}
+	EnsureLoggingDefaults(&cfg)
+	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
 	data, err := readFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"log_file_path", "log_max_size_mb", "log_max_backups", "log_max_age_days"} {
-		if !strings.Contains(data, key) {
-			t.Errorf("header missing key %q in:\n%s", key, data)
+
+	// Top-of-file header.
+	if !strings.Contains(data, "proxmoxvue-agent config") {
+		t.Errorf("expected file header, got:\n%s", data)
+	}
+
+	// Each documented key should have its inline comment immediately above
+	// the key itself (yaml.v3 puts HeadComments on the line above).
+	checks := []struct {
+		commentFragment string
+		key             string
+	}{
+		{"Set by --register", "project_ref:"},
+		{"Long-lived refresh token", "refresh_token:"},
+		{"Tick frequency for the snapshot push loop", "poll_interval_seconds:"},
+		{"debug | info | warn | error", "log_level:"},
+		{"Plain-text log file", "log_file_path:"},
+		{"Rotate the active file", "log_max_size_mb:"},
+		{"FIFO, oldest deleted first", "log_max_backups:"},
+		{"Delete rotated files older", "log_max_age_days:"},
+	}
+	for _, c := range checks {
+		idx := strings.Index(data, c.commentFragment)
+		if idx == -1 {
+			t.Errorf("missing comment fragment %q in:\n%s", c.commentFragment, data)
+			continue
+		}
+		rest := data[idx:]
+		keyIdx := strings.Index(rest, c.key)
+		if keyIdx == -1 {
+			t.Errorf("key %q not found after comment %q", c.key, c.commentFragment)
+			continue
+		}
+		// Between comment and key, no other yaml key should appear.
+		between := rest[:keyIdx]
+		if strings.Count(between, "\n") > 2 {
+			t.Errorf("comment %q is not directly above key %q (gap=%q)",
+				c.commentFragment, c.key, between)
 		}
 	}
 }
