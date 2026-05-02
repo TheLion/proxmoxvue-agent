@@ -29,6 +29,9 @@ const (
 	ActionSnapshotCreate   Action = "snapshot.create"
 	ActionSnapshotDelete   Action = "snapshot.delete"
 	ActionSnapshotRollback Action = "snapshot.rollback"
+
+	ActionVMCreate  Action = "vm.create"
+	ActionLXCCreate Action = "lxc.create"
 )
 
 // IsPowerAction rapporteert of de action een guest power-state-actie is
@@ -50,9 +53,19 @@ func (a Action) IsSnapshotAction() bool {
 	return false
 }
 
+// IsCreateAction rapporteert of de action een nieuwe guest aanmaakt
+// (qemu/lxc) via een POST op de node-level guest-collection.
+func (a Action) IsCreateAction() bool {
+	switch a {
+	case ActionVMCreate, ActionLXCCreate:
+		return true
+	}
+	return false
+}
+
 // IsKnown is true voor elke action die de dispatcher kan routeren.
 func (a Action) IsKnown() bool {
-	return a.IsPowerAction() || a.IsSnapshotAction()
+	return a.IsPowerAction() || a.IsSnapshotAction() || a.IsCreateAction()
 }
 
 // PerformAction POST't /api2/json/nodes/{node}/{kind}/{vmid}/status/{action}
@@ -116,6 +129,90 @@ func (c *Client) RollbackSnapshot(ctx context.Context, kind GuestKind, node stri
 		return "", fmt.Errorf("proxmox snapshot.rollback %s/%d %s: %w", kind, vmid, name, err)
 	}
 	return wrapper.Data, nil
+}
+
+// CreateVMSpec bevat de minimale velden voor een QEMU VM-create. Subset van
+// Proxmox' /api2/json/nodes/{node}/qemu params; uitgebreid wanneer iOS meer
+// opties exposeert. ostype=l26 wordt server-side geïnjecteerd zodat iOS dat
+// niet mee hoeft te sturen.
+type CreateVMSpec struct {
+	Node          string
+	VMID          int
+	Name          string
+	Cores         int
+	MemoryMB      int
+	DiskStorage   string
+	DiskSizeGB    int
+	NetworkBridge string
+}
+
+// CreateVM POST /api2/json/nodes/{node}/qemu. Returnt de UPID.
+func (c *Client) CreateVM(ctx context.Context, spec CreateVMSpec) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", spec.Node)
+	form := url.Values{
+		"vmid":   {fmt.Sprintf("%d", spec.VMID)},
+		"name":   {spec.Name},
+		"cores":  {fmt.Sprintf("%d", spec.Cores)},
+		"memory": {fmt.Sprintf("%d", spec.MemoryMB)},
+		"scsi0":  {fmt.Sprintf("%s:%d", spec.DiskStorage, spec.DiskSizeGB)},
+		"net0":   {fmt.Sprintf("virtio,bridge=%s", spec.NetworkBridge)},
+		"ostype": {"l26"},
+	}
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := c.postForm(ctx, path, form, &wrapper); err != nil {
+		return "", fmt.Errorf("proxmox vm.create node=%s vmid=%d: %w", spec.Node, spec.VMID, err)
+	}
+	return wrapper.Data, nil
+}
+
+// CreateLXCSpec bevat de minimale velden voor een LXC-container-create. Het
+// password-veld bevat plaintext credentials — caller moet ervoor zorgen dat
+// dit veld niet wordt gelogd. Future: zie row 1476 (E2E-encryptie via cluster-key).
+type CreateLXCSpec struct {
+	Node          string
+	VMID          int
+	Hostname      string
+	OSTemplate    string
+	Password      string
+	Cores         int
+	MemoryMB      int
+	DiskStorage   string
+	DiskSizeGB    int
+	NetworkBridge string
+	Unprivileged  bool
+}
+
+// CreateLXC POST /api2/json/nodes/{node}/lxc. Returnt de UPID.
+func (c *Client) CreateLXC(ctx context.Context, spec CreateLXCSpec) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/lxc", spec.Node)
+	form := url.Values{
+		"vmid":         {fmt.Sprintf("%d", spec.VMID)},
+		"hostname":     {spec.Hostname},
+		"ostemplate":   {spec.OSTemplate},
+		"password":     {spec.Password},
+		"cores":        {fmt.Sprintf("%d", spec.Cores)},
+		"memory":       {fmt.Sprintf("%d", spec.MemoryMB)},
+		"rootfs":       {fmt.Sprintf("%s:%d", spec.DiskStorage, spec.DiskSizeGB)},
+		"net0":         {fmt.Sprintf("name=eth0,bridge=%s,ip=dhcp", spec.NetworkBridge)},
+		"unprivileged": {boolToFlag(spec.Unprivileged)},
+		"start":        {"0"},
+	}
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := c.postForm(ctx, path, form, &wrapper); err != nil {
+		return "", fmt.Errorf("proxmox lxc.create node=%s vmid=%d: %w", spec.Node, spec.VMID, err)
+	}
+	return wrapper.Data, nil
+}
+
+func boolToFlag(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 // SnapshotNamePattern is dezelfde validatie die Proxmox toepast op snapname

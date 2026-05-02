@@ -18,6 +18,8 @@ type ProxmoxActor interface {
 	CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
 	DeleteSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	RollbackSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
+	CreateVM(ctx context.Context, spec proxmox.CreateVMSpec) (string, error)
+	CreateLXC(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error)
 	AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -56,6 +58,19 @@ type commandPayload struct {
 	Name           string `json:"name,omitempty"`
 	Description    string `json:"description,omitempty"`
 	IncludeVmState bool   `json:"include_vmstate,omitempty"`
+
+	// vm.create / lxc.create gedeelde velden.
+	Cores         int    `json:"cores,omitempty"`
+	MemoryMB      int    `json:"memory_mb,omitempty"`
+	DiskStorage   string `json:"disk_storage,omitempty"`
+	DiskSizeGB    int    `json:"disk_size_gb,omitempty"`
+	NetworkBridge string `json:"network_bridge,omitempty"`
+
+	// lxc.create-specifiek. Password is plaintext (MVP-keuze, zie row 1476).
+	Hostname     string `json:"hostname,omitempty"`
+	OSTemplate   string `json:"ostemplate,omitempty"`
+	Password     string `json:"password,omitempty"`
+	Unprivileged bool   `json:"unprivileged,omitempty"`
 }
 
 // GuestRef is de geparsete payload van een command — wat hebben we nodig om
@@ -187,6 +202,26 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 			upid, err = d.pve.RollbackSnapshot(ctx, guestKind, p.Node, p.VMID, p.Name)
 		default:
 			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "unrouted snapshot action: " + cmd.Kind})
+		}
+	case action.IsCreateAction():
+		switch action {
+		case proxmox.ActionVMCreate:
+			upid, err = d.pve.CreateVM(ctx, proxmox.CreateVMSpec{
+				Node: p.Node, VMID: p.VMID, Name: p.Name,
+				Cores: p.Cores, MemoryMB: p.MemoryMB,
+				DiskStorage: p.DiskStorage, DiskSizeGB: p.DiskSizeGB,
+				NetworkBridge: p.NetworkBridge,
+			})
+		case proxmox.ActionLXCCreate:
+			upid, err = d.pve.CreateLXC(ctx, proxmox.CreateLXCSpec{
+				Node: p.Node, VMID: p.VMID, Hostname: p.Hostname,
+				OSTemplate: p.OSTemplate, Password: p.Password,
+				Cores: p.Cores, MemoryMB: p.MemoryMB,
+				DiskStorage: p.DiskStorage, DiskSizeGB: p.DiskSizeGB,
+				NetworkBridge: p.NetworkBridge, Unprivileged: p.Unprivileged,
+			})
+		default:
+			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "unrouted create action: " + cmd.Kind})
 		}
 	default:
 		// IsKnown filterde dit eerder weg, dus dit pad is onbereikbaar —

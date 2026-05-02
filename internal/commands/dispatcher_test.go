@@ -13,11 +13,13 @@ import (
 )
 
 type fakeActor struct {
-	perform        func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
-	createSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
+	perform          func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
+	createSnapshot   func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
 	deleteSnapshot   func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	rollbackSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
-	await          func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
+	createVM         func(ctx context.Context, spec proxmox.CreateVMSpec) (string, error)
+	createLXC        func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error)
+	await            func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
 func (f *fakeActor) PerformAction(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error) {
@@ -40,6 +42,18 @@ func (f *fakeActor) RollbackSnapshot(ctx context.Context, kind proxmox.GuestKind
 		return "", fmt.Errorf("RollbackSnapshot not configured for this test")
 	}
 	return f.rollbackSnapshot(ctx, kind, node, vmid, name)
+}
+func (f *fakeActor) CreateVM(ctx context.Context, spec proxmox.CreateVMSpec) (string, error) {
+	if f.createVM == nil {
+		return "", fmt.Errorf("CreateVM not configured for this test")
+	}
+	return f.createVM(ctx, spec)
+}
+func (f *fakeActor) CreateLXC(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+	if f.createLXC == nil {
+		return "", fmt.Errorf("CreateLXC not configured for this test")
+	}
+	return f.createLXC(ctx, spec)
 }
 func (f *fakeActor) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
 	return f.await(ctx, node, upid, timeout)
@@ -410,6 +424,116 @@ func TestHandle_SnapshotRollback_HappyPath(t *testing.T) {
 	}
 	if store.completed[14].result["upid"] != "UPID:rb" {
 		t.Errorf("upid=%v", store.completed[14].result["upid"])
+	}
+}
+
+func newVMCreateCmd(id int64, node string, vmid int, name string, cores, memMB int, store string, diskGB int, bridge string) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "qemu",
+		"node":           node,
+		"vmid":           vmid,
+		"name":           name,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionVMCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_VMCreate_HappyPath(t *testing.T) {
+	var captured proxmox.CreateVMSpec
+	actor := &fakeActor{
+		createVM: func(ctx context.Context, spec proxmox.CreateVMSpec) (string, error) {
+			captured = spec
+			return "UPID:vmnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newVMCreateCmd(30, "n1", 200, "alpha", 2, 2048, "local-lvm", 20, "vmbr0")
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := proxmox.CreateVMSpec{Node: "n1", VMID: 200, Name: "alpha", Cores: 2, MemoryMB: 2048, DiskStorage: "local-lvm", DiskSizeGB: 20, NetworkBridge: "vmbr0"}
+	if captured != want {
+		t.Errorf("spec mismatch: got %+v, want %+v", captured, want)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[30].status != "done" {
+		t.Errorf("status=%q", store.completed[30].status)
+	}
+}
+
+func newLXCCreateCmd(id int64, node string, vmid int, hostname, ostemplate, password string, cores, memMB int, store string, diskGB int, bridge string, unprivileged bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "lxc",
+		"node":           node,
+		"vmid":           vmid,
+		"hostname":       hostname,
+		"ostemplate":     ostemplate,
+		"password":       password,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+		"unprivileged":   unprivileged,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionLXCCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
+	var captured proxmox.CreateLXCSpec
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			captured = spec
+			return "UPID:lxcnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newLXCCreateCmd(31, "n1", 201, "alpha-ct", "local:vztmpl/debian.tar.zst", "s3cret!", 1, 512, "local-lvm", 8, "vmbr0", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := proxmox.CreateLXCSpec{
+		Node: "n1", VMID: 201, Hostname: "alpha-ct",
+		OSTemplate: "local:vztmpl/debian.tar.zst", Password: "s3cret!",
+		Cores: 1, MemoryMB: 512, DiskStorage: "local-lvm", DiskSizeGB: 8,
+		NetworkBridge: "vmbr0", Unprivileged: true,
+	}
+	if captured != want {
+		t.Errorf("spec mismatch: got %+v, want %+v", captured, want)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[31].status != "done" {
+		t.Errorf("status=%q", store.completed[31].status)
 	}
 }
 
