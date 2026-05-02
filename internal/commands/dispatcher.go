@@ -20,6 +20,7 @@ type ProxmoxActor interface {
 	RollbackSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	CreateVM(ctx context.Context, spec proxmox.CreateVMSpec) (string, error)
 	CreateLXC(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error)
+	DeleteGuest(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error)
 	AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -71,6 +72,10 @@ type commandPayload struct {
 	OSTemplate   string `json:"ostemplate,omitempty"`
 	Password     string `json:"password,omitempty"`
 	Unprivileged bool   `json:"unprivileged,omitempty"`
+
+	// guest.delete-specifiek.
+	DestroyDisks bool `json:"destroy_disks,omitempty"`
+	PurgeBackups bool `json:"purge_backups,omitempty"`
 }
 
 // GuestRef is de geparsete payload van een command — wat hebben we nodig om
@@ -203,6 +208,8 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 		default:
 			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "unrouted snapshot action: " + cmd.Kind})
 		}
+	case action == proxmox.ActionGuestDelete:
+		upid, err = d.pve.DeleteGuest(ctx, guestKind, p.Node, p.VMID, p.DestroyDisks, p.PurgeBackups)
 	case action.IsCreateAction():
 		switch action {
 		case proxmox.ActionVMCreate:

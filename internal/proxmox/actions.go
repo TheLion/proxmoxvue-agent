@@ -32,6 +32,8 @@ const (
 
 	ActionVMCreate  Action = "vm.create"
 	ActionLXCCreate Action = "lxc.create"
+
+	ActionGuestDelete Action = "guest.delete"
 )
 
 // IsPowerAction rapporteert of de action een guest power-state-actie is
@@ -65,7 +67,14 @@ func (a Action) IsCreateAction() bool {
 
 // IsKnown is true voor elke action die de dispatcher kan routeren.
 func (a Action) IsKnown() bool {
-	return a.IsPowerAction() || a.IsSnapshotAction() || a.IsCreateAction()
+	if a.IsPowerAction() || a.IsSnapshotAction() || a.IsCreateAction() {
+		return true
+	}
+	switch a {
+	case ActionGuestDelete:
+		return true
+	}
+	return false
 }
 
 // PerformAction POST't /api2/json/nodes/{node}/{kind}/{vmid}/status/{action}
@@ -204,6 +213,32 @@ func (c *Client) CreateLXC(ctx context.Context, spec CreateLXCSpec) (string, err
 	}
 	if err := c.postForm(ctx, path, form, &wrapper); err != nil {
 		return "", fmt.Errorf("proxmox lxc.create node=%s vmid=%d: %w", spec.Node, spec.VMID, err)
+	}
+	return wrapper.Data, nil
+}
+
+// DeleteGuest DELETE /api2/json/nodes/{node}/{kind}/{vmid}. Met
+// `destroyDisks` worden niet-gelinkte disks mee verwijderd
+// (`destroy-unreferenced-disks=1`); met `purgeBackups` ook alle
+// back-ups (`purge=1`). Proxmox eist dat de guest gestopt is — anders
+// krijgt de caller een 400 doorgegeven.
+func (c *Client) DeleteGuest(ctx context.Context, kind GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
+	q := url.Values{}
+	if destroyDisks {
+		q.Set("destroy-unreferenced-disks", "1")
+	}
+	if purgeBackups {
+		q.Set("purge", "1")
+	}
+	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d", node, kind, vmid)
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := c.deleteJSON(ctx, path, &wrapper); err != nil {
+		return "", fmt.Errorf("proxmox guest.delete %s/%d: %w", kind, vmid, err)
 	}
 	return wrapper.Data, nil
 }

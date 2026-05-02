@@ -19,6 +19,7 @@ type fakeActor struct {
 	rollbackSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	createVM         func(ctx context.Context, spec proxmox.CreateVMSpec) (string, error)
 	createLXC        func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error)
+	deleteGuest      func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error)
 	await            func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -54,6 +55,12 @@ func (f *fakeActor) CreateLXC(ctx context.Context, spec proxmox.CreateLXCSpec) (
 		return "", fmt.Errorf("CreateLXC not configured for this test")
 	}
 	return f.createLXC(ctx, spec)
+}
+func (f *fakeActor) DeleteGuest(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
+	if f.deleteGuest == nil {
+		return "", fmt.Errorf("DeleteGuest not configured for this test")
+	}
+	return f.deleteGuest(ctx, kind, node, vmid, destroyDisks, purgeBackups)
 }
 func (f *fakeActor) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
 	return f.await(ctx, node, upid, timeout)
@@ -534,6 +541,62 @@ func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.completed[31].status != "done" {
 		t.Errorf("status=%q", store.completed[31].status)
+	}
+}
+
+func newGuestDeleteCmd(id int64, guestKind, node string, vmid int, destroyDisks, purgeBackups bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     guestKind,
+		"node":           node,
+		"vmid":           vmid,
+		"destroy_disks":  destroyDisks,
+		"purge_backups":  purgeBackups,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionGuestDelete),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_GuestDelete_HappyPath_FlagsPropagated(t *testing.T) {
+	var captured struct {
+		kind                       proxmox.GuestKind
+		node                       string
+		vmid                       int
+		destroyDisks, purgeBackups bool
+	}
+	actor := &fakeActor{
+		deleteGuest: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
+			captured.kind = kind
+			captured.node = node
+			captured.vmid = vmid
+			captured.destroyDisks = destroyDisks
+			captured.purgeBackups = purgeBackups
+			return "UPID:del", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newGuestDeleteCmd(40, "lxc", "n1", 300, true, false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.kind != proxmox.GuestKindLXC || captured.node != "n1" || captured.vmid != 300 ||
+		!captured.destroyDisks || captured.purgeBackups {
+		t.Errorf("unexpected: %+v", captured)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[40].status != "done" {
+		t.Errorf("status=%q", store.completed[40].status)
 	}
 }
 
