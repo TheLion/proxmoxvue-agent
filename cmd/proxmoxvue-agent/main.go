@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"github.com/TheLion/proxmoxvue-agent/internal/enroll"
 	"github.com/TheLion/proxmoxvue-agent/internal/runtime"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -75,20 +77,36 @@ func runAgent(args []string) {
 		os.Exit(2)
 	}
 
-	// Init slog handler op basis van agent.log_level. Config kan ontbreken
-	// of corrupt zijn — die fout komt straks uit runtime.Start; voor logging
-	// vallen we hier terug op INFO. Een wel-aanwezige maar ongeldige waarde
-	// is fail-fast (anders verbergen we user-fouten).
+	// Init slog handler op basis van agent.log_level + log_file_path. Config
+	// kan ontbreken of corrupt zijn — die fout komt straks uit runtime.Start;
+	// voor logging vallen we hier terug op INFO + default file-path. Een
+	// wel-aanwezige maar ongeldige log_level / negatieve logging-waarde is
+	// fail-fast (anders verbergen we user-fouten).
 	level := slog.LevelInfo
+	rotation := config.AgentConfig{}.EffectiveLogRotation()
 	if cfg, err := config.Load(*configPath); err == nil {
 		l, err := config.ParseLogLevel(cfg.Agent.LogLevel)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		if err := cfg.Agent.ValidateLogging(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		level = l
+		// Persist defaults in config.yml zodat de keys zichtbaar zijn voor
+		// de gebruiker. Bij write-fout (bv. read-only fs): warn maar
+		// doorgaan — agent draait verder met in-memory defaults.
+		if config.EnsureLoggingDefaults(&cfg) {
+			if saveErr := config.Save(*configPath, cfg); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "warn: kon logging-defaults niet naar config schrijven: %v\n", saveErr)
+			}
+		}
+		rotation = cfg.Agent.EffectiveLogRotation()
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	logSink := newLogSink(rotation)
+	slog.SetDefault(slog.New(slog.NewTextHandler(logSink, &slog.HandlerOptions{Level: level})))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -101,6 +119,25 @@ func runAgent(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent exited: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// newLogSink bouwt een lumberjack writer op de gegeven rotation-config. Bij
+// een onschrijfbare LogFilePath (typisch tijdens lokaal `go run` zonder
+// /var/log toegang) valt het terug op stderr — de agent crasht dan niet op
+// een logging-pad, alleen runtime.Start kan z'n echte fouten nog rapporteren.
+func newLogSink(r config.LogRotation) io.Writer {
+	probe, err := os.OpenFile(r.FilePath, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "log file %s not writable (%v) — falling back to stderr\n", r.FilePath, err)
+		return os.Stderr
+	}
+	_ = probe.Close()
+	return &lumberjack.Logger{
+		Filename:   r.FilePath,
+		MaxSize:    r.MaxSizeMB,
+		MaxBackups: r.MaxBackups,
+		MaxAge:     r.MaxAgeDays,
 	}
 }
 
