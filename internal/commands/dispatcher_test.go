@@ -15,6 +15,7 @@ import (
 type fakeActor struct {
 	perform        func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
 	createSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
+	deleteSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	await          func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -26,6 +27,12 @@ func (f *fakeActor) CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, 
 		return "", fmt.Errorf("CreateSnapshot not configured for this test")
 	}
 	return f.createSnapshot(ctx, kind, node, vmid, name, description, includeVmState)
+}
+func (f *fakeActor) DeleteSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+	if f.deleteSnapshot == nil {
+		return "", fmt.Errorf("DeleteSnapshot not configured for this test")
+	}
+	return f.deleteSnapshot(ctx, kind, node, vmid, name)
 }
 func (f *fakeActor) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
 	return f.await(ctx, node, upid, timeout)
@@ -282,6 +289,58 @@ func TestHandle_SnapshotCreate_InvalidName_Fails(t *testing.T) {
 	}
 	if store.completed[12].status != "failed" {
 		t.Errorf("status=%q", store.completed[12].status)
+	}
+}
+
+func newSnapshotDeleteCmd(id int64, guestKind, node string, vmid int, name string) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind": guestKind,
+		"node":       node,
+		"vmid":       vmid,
+		"name":       name,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionSnapshotDelete),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_SnapshotDelete_HappyPath(t *testing.T) {
+	var capturedName string
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			t.Error("PerformAction should not be called for snapshot.delete")
+			return "", nil
+		},
+		deleteSnapshot: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+			capturedName = name
+			return "UPID:del", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newSnapshotDeleteCmd(13, "qemu", "n1", 112, "snap_alpha")
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if capturedName != "snap_alpha" {
+		t.Errorf("captured name=%q want snap_alpha", capturedName)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[13].status != "done" {
+		t.Errorf("status=%q", store.completed[13].status)
+	}
+	if store.completed[13].result["upid"] != "UPID:del" {
+		t.Errorf("upid=%v", store.completed[13].result["upid"])
 	}
 }
 

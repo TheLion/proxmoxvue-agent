@@ -27,6 +27,7 @@ const (
 	ActionResume   Action = "resume"
 
 	ActionSnapshotCreate Action = "snapshot.create"
+	ActionSnapshotDelete Action = "snapshot.delete"
 )
 
 // IsPowerAction rapporteert of de action een guest power-state-actie is
@@ -42,7 +43,7 @@ func (a Action) IsPowerAction() bool {
 // IsSnapshotAction rapporteert of de action via een /snapshot-endpoint loopt.
 func (a Action) IsSnapshotAction() bool {
 	switch a {
-	case ActionSnapshotCreate:
+	case ActionSnapshotCreate, ActionSnapshotDelete:
 		return true
 	}
 	return false
@@ -84,6 +85,20 @@ func (c *Client) CreateSnapshot(ctx context.Context, kind GuestKind, node string
 	}
 	if err := c.postForm(ctx, path, form, &wrapper); err != nil {
 		return "", fmt.Errorf("proxmox snapshot.create %s/%d %s: %w", kind, vmid, name, err)
+	}
+	return wrapper.Data, nil
+}
+
+// DeleteSnapshot DELETE /api2/json/nodes/{node}/{kind}/{vmid}/snapshot/{name}.
+// Returnt de UPID. Proxmox URL-encodet snapname zelf niet — caller heeft hier
+// al een gevalideerde naam (SnapshotNamePattern), dus geen URL-injectie-risk.
+func (c *Client) DeleteSnapshot(ctx context.Context, kind GuestKind, node string, vmid int, name string) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/snapshot/%s", node, kind, vmid, url.PathEscape(name))
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := c.deleteJSON(ctx, path, &wrapper); err != nil {
+		return "", fmt.Errorf("proxmox snapshot.delete %s/%d %s: %w", kind, vmid, name, err)
 	}
 	return wrapper.Data, nil
 }

@@ -16,6 +16,7 @@ import (
 type ProxmoxActor interface {
 	PerformAction(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
 	CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
+	DeleteSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
 	AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -176,7 +177,14 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 		if !proxmox.SnapshotNamePattern.MatchString(p.Name) {
 			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "invalid snapshot name: " + p.Name})
 		}
-		upid, err = d.pve.CreateSnapshot(ctx, guestKind, p.Node, p.VMID, p.Name, p.Description, p.IncludeVmState)
+		switch action {
+		case proxmox.ActionSnapshotCreate:
+			upid, err = d.pve.CreateSnapshot(ctx, guestKind, p.Node, p.VMID, p.Name, p.Description, p.IncludeVmState)
+		case proxmox.ActionSnapshotDelete:
+			upid, err = d.pve.DeleteSnapshot(ctx, guestKind, p.Node, p.VMID, p.Name)
+		default:
+			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "unrouted snapshot action: " + cmd.Kind})
+		}
 	default:
 		// IsKnown filterde dit eerder weg, dus dit pad is onbereikbaar —
 		// expliciete failed-completion zodat we niet in een onverwachte
