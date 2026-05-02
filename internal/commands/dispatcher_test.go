@@ -13,12 +13,19 @@ import (
 )
 
 type fakeActor struct {
-	perform func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
-	await   func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
+	perform        func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
+	createSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
+	await          func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
 func (f *fakeActor) PerformAction(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error) {
 	return f.perform(ctx, kind, node, vmid, action)
+}
+func (f *fakeActor) CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error) {
+	if f.createSnapshot == nil {
+		return "", fmt.Errorf("CreateSnapshot not configured for this test")
+	}
+	return f.createSnapshot(ctx, kind, node, vmid, name, description, includeVmState)
 }
 func (f *fakeActor) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
 	return f.await(ctx, node, upid, timeout)
@@ -184,6 +191,97 @@ func TestHandle_TTLExpired_MarksExpired(t *testing.T) {
 	}
 	if store.completed[7].status != "expired" {
 		t.Errorf("status=%q want expired", store.completed[7].status)
+	}
+}
+
+func newSnapshotCreateCmd(id int64, guestKind, node string, vmid int, name, description string, includeVmState bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":      guestKind,
+		"node":            node,
+		"vmid":            vmid,
+		"name":            name,
+		"description":     description,
+		"include_vmstate": includeVmState,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionSnapshotCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_SnapshotCreate_HappyPath(t *testing.T) {
+	var captured struct {
+		kind                                  proxmox.GuestKind
+		node, name, description               string
+		vmid                                  int
+		includeVmState                        bool
+	}
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			t.Error("PerformAction should not be called for snapshot.create")
+			return "", nil
+		},
+		createSnapshot: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error) {
+			captured.kind = kind
+			captured.node = node
+			captured.vmid = vmid
+			captured.name = name
+			captured.description = description
+			captured.includeVmState = includeVmState
+			return "UPID:snap", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newSnapshotCreateCmd(11, "qemu", "n1", 112, "snap_alpha", "before upgrade", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.kind != proxmox.GuestKindQEMU || captured.node != "n1" || captured.vmid != 112 ||
+		captured.name != "snap_alpha" || captured.description != "before upgrade" || !captured.includeVmState {
+		t.Errorf("unexpected snapshot args: %+v", captured)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[11].status != "done" {
+		t.Errorf("status=%q", store.completed[11].status)
+	}
+	if store.completed[11].result["upid"] != "UPID:snap" {
+		t.Errorf("upid=%v", store.completed[11].result["upid"])
+	}
+}
+
+func TestHandle_SnapshotCreate_InvalidName_Fails(t *testing.T) {
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			return "", nil
+		},
+		createSnapshot: func(context.Context, proxmox.GuestKind, string, int, string, string, bool) (string, error) {
+			t.Error("CreateSnapshot should not be called for invalid name")
+			return "", nil
+		},
+		await: func(context.Context, string, string, time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	// Beginnen met cijfer is volgens Proxmox-regels niet geldig.
+	cmd := newSnapshotCreateCmd(12, "qemu", "n1", 112, "1bad", "", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if store.completed[12].status != "failed" {
+		t.Errorf("status=%q", store.completed[12].status)
 	}
 }
 

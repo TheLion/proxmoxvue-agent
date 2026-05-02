@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -132,6 +133,39 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("parse response: %w", err)
+	}
+	return nil
+}
+
+// postForm POST't een url.Values als application/x-www-form-urlencoded body —
+// het formaat dat Proxmox-write-endpoints (snapshot, vm-create, etc.) eisen.
+func (c *Client) postForm(ctx context.Context, path string, form url.Values, out any) error {
+	body := strings.NewReader(form.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.APIURL+path, body)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("parse response: %w", err)
+		}
 	}
 	return nil
 }

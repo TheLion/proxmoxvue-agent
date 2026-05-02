@@ -15,6 +15,7 @@ import (
 // ProxmoxActor is de subset van proxmox.Client die de dispatcher gebruikt.
 type ProxmoxActor interface {
 	PerformAction(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
+	CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
 	AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
@@ -48,6 +49,11 @@ type commandPayload struct {
 	GuestKind string `json:"guest_kind"`
 	Node      string `json:"node"`
 	VMID      int    `json:"vmid"`
+
+	// Snapshot-specifiek (alleen aanwezig voor snapshot.* actions).
+	Name           string `json:"name,omitempty"`
+	Description    string `json:"description,omitempty"`
+	IncludeVmState bool   `json:"include_vmstate,omitempty"`
 }
 
 // GuestRef is de geparsete payload van een command — wat hebben we nodig om
@@ -157,15 +163,33 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "missing node or vmid"})
 	}
 
-	// 4. Dispatch naar Proxmox.
-	upid, err := d.pve.PerformAction(ctx, guestKind, p.Node, p.VMID, action)
+	// 4. Dispatch naar Proxmox. Per-category routing: power-actions naar
+	//    /status/{action}, snapshot-actions naar /snapshot. Wait-timeout
+	//    is per category gekozen (vmstate-snapshots kunnen 120s+ duren op
+	//    grote VMs, te krap onder de 5min default ActionTimeout op zichzelf).
+	var upid string
+	waitTimeout := d.ActionTimeout
+	switch {
+	case action.IsPowerAction():
+		upid, err = d.pve.PerformAction(ctx, guestKind, p.Node, p.VMID, action)
+	case action.IsSnapshotAction():
+		if !proxmox.SnapshotNamePattern.MatchString(p.Name) {
+			return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "invalid snapshot name: " + p.Name})
+		}
+		upid, err = d.pve.CreateSnapshot(ctx, guestKind, p.Node, p.VMID, p.Name, p.Description, p.IncludeVmState)
+	default:
+		// IsKnown filterde dit eerder weg, dus dit pad is onbereikbaar —
+		// expliciete failed-completion zodat we niet in een onverwachte
+		// silent-skip belanden bij toekomstige uitbreiding.
+		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "unrouted kind: " + cmd.Kind})
+	}
 	if err != nil {
 		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": err.Error()})
 	}
 	slog.Info("command dispatched", "id", cmd.ID, "upid", upid, "node", p.Node, "vmid", p.VMID)
 
 	// 5. Wacht tot de task klaar is (of timeout).
-	st, err := d.pve.AwaitTaskCompletion(ctx, p.Node, upid, d.ActionTimeout)
+	st, err := d.pve.AwaitTaskCompletion(ctx, p.Node, upid, waitTimeout)
 	if err != nil {
 		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"upid": upid, "error": err.Error()})
 	}
