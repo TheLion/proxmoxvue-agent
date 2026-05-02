@@ -94,21 +94,29 @@ func TestValidateLogging_ZeroIsValid(t *testing.T) {
 	}
 }
 
-func TestEnsureLoggingDefaults(t *testing.T) {
+func TestEnsureDefaults(t *testing.T) {
 	cfg := File{}
-	changed := EnsureLoggingDefaults(&cfg)
+	changed := EnsureDefaults(&cfg)
 	if !changed {
 		t.Fatal("expected changed=true on empty config")
+	}
+	if cfg.Agent.PollIntervalSeconds != DefaultPollIntervalSeconds {
+		t.Errorf("PollIntervalSeconds=%d", cfg.Agent.PollIntervalSeconds)
+	}
+	if cfg.Agent.LogLevel != DefaultLogLevel {
+		t.Errorf("LogLevel=%q", cfg.Agent.LogLevel)
 	}
 	if cfg.Agent.LogFilePath != DefaultLogFilePath {
 		t.Errorf("LogFilePath=%q", cfg.Agent.LogFilePath)
 	}
-	if cfg.Agent.LogMaxSizeMB != 10 || cfg.Agent.LogMaxBackups != 5 || cfg.Agent.LogMaxAgeDays != 30 {
+	if cfg.Agent.LogMaxSizeMB != DefaultLogMaxSizeMB ||
+		cfg.Agent.LogMaxBackups != DefaultLogMaxBackups ||
+		cfg.Agent.LogMaxAgeDays != DefaultLogMaxAgeDays {
 		t.Errorf("defaults not applied: %+v", cfg.Agent)
 	}
 
 	// Tweede call op already-filled config moet idempotent zijn.
-	if EnsureLoggingDefaults(&cfg) {
+	if EnsureDefaults(&cfg) {
 		t.Error("expected changed=false on fully populated config")
 	}
 }
@@ -144,9 +152,8 @@ func TestSave_WritesInlineComments(t *testing.T) {
 	path := filepath.Join(dir, "config.yml")
 	cfg := File{
 		Supabase: SupabaseConfig{ProjectRef: "ref", ClusterID: "uuid", RefreshToken: "x"},
-		Agent:    AgentConfig{LogLevel: "info", PollIntervalSeconds: 30},
 	}
-	EnsureLoggingDefaults(&cfg)
+	EnsureDefaults(&cfg)
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}

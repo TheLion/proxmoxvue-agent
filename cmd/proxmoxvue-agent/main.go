@@ -95,13 +95,15 @@ func runAgent(args []string) {
 			os.Exit(1)
 		}
 		level = l
-		// Persist defaults in config.yml zodat de keys zichtbaar zijn voor
-		// de gebruiker. Bij write-fout (bv. read-only fs): warn maar
-		// doorgaan — agent draait verder met in-memory defaults.
-		if config.EnsureLoggingDefaults(&cfg) {
-			if saveErr := config.Save(*configPath, cfg); saveErr != nil {
-				fmt.Fprintf(os.Stderr, "warn: kon logging-defaults niet naar config schrijven: %v\n", saveErr)
-			}
+		// Vul ontbrekende defaults in en herschrijf config.yml elke start
+		// zodat alle keys + inline comments zichtbaar blijven, ook na een
+		// upgrade die nieuwe velden / comments introduceert. Idempotent
+		// als er niets verandert (zelfde bytes, alleen mtime). Bij
+		// write-fout (bv. read-only fs): warn maar doorgaan — agent
+		// draait verder met in-memory defaults.
+		config.EnsureDefaults(&cfg)
+		if saveErr := config.Save(*configPath, cfg); saveErr != nil {
+			fmt.Fprintf(os.Stderr, "warn: kon config niet herschrijven: %v\n", saveErr)
 		}
 		rotation = cfg.Agent.EffectiveLogRotation()
 	}
@@ -188,9 +190,7 @@ func runRegister(args []string) {
 		ClusterID:    result.ClusterID,
 		RefreshToken: result.RefreshToken,
 	}
-	if cfg.Agent.LogLevel == "" {
-		cfg.Agent.LogLevel = "info"
-	}
+	config.EnsureDefaults(&cfg)
 
 	if err := config.Save(*configPath, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)

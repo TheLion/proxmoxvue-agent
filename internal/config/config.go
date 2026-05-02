@@ -16,8 +16,8 @@ import (
 
 type File struct {
 	Supabase SupabaseConfig `yaml:"supabase"`
-	Proxmox  ProxmoxConfig  `yaml:"proxmox,omitempty"`
-	Agent    AgentConfig    `yaml:"agent,omitempty"`
+	Proxmox  ProxmoxConfig  `yaml:"proxmox"`
+	Agent    AgentConfig    `yaml:"agent"`
 }
 
 type SupabaseConfig struct {
@@ -35,9 +35,9 @@ func (c SupabaseConfig) String() string {
 }
 
 type ProxmoxConfig struct {
-	APIURL         string `yaml:"api_url,omitempty"`
-	APITokenID     string `yaml:"api_token_id,omitempty"`
-	APITokenSecret string `yaml:"api_token_secret,omitempty"`
+	APIURL         string `yaml:"api_url"`
+	APITokenID     string `yaml:"api_token_id"`
+	APITokenSecret string `yaml:"api_token_secret"`
 	VerifyTLS      bool   `yaml:"verify_tls"`
 }
 
@@ -51,17 +51,18 @@ func (c ProxmoxConfig) String() string {
 }
 
 type AgentConfig struct {
-	PollIntervalSeconds int    `yaml:"poll_interval_seconds,omitempty"`
-	LogLevel            string `yaml:"log_level,omitempty"`
+	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
+	LogLevel            string `yaml:"log_level"`
 
 	// File-logging via lumberjack. Lege LogFilePath valt terug op de default
 	// `/var/log/proxmoxvue-agent.log`; de andere lege/0-waarden vallen terug
 	// op de defaults uit DefaultLogRotation. Gebruiker kan elk veld los
-	// overrullen via config.yml.
-	LogFilePath   string `yaml:"log_file_path,omitempty"`
-	LogMaxSizeMB  int    `yaml:"log_max_size_mb,omitempty"`
-	LogMaxBackups int    `yaml:"log_max_backups,omitempty"`
-	LogMaxAgeDays int    `yaml:"log_max_age_days,omitempty"`
+	// overrullen via config.yml. EnsureDefaults persisteert deze waarden bij
+	// elke agent-start zodat de keys altijd zichtbaar in config.yml staan.
+	LogFilePath   string `yaml:"log_file_path"`
+	LogMaxSizeMB  int    `yaml:"log_max_size_mb"`
+	LogMaxBackups int    `yaml:"log_max_backups"`
+	LogMaxAgeDays int    `yaml:"log_max_age_days"`
 }
 
 // LogRotation bundelt de effectieve logging-instellingen na default-fill,
@@ -75,6 +76,16 @@ type LogRotation struct {
 
 // DefaultLogFilePath is de default log-locatie als config.yml geen pad geeft.
 const DefaultLogFilePath = "/var/log/proxmoxvue-agent.log"
+
+// Defaults voor de overige agent-velden, zo gecentraliseerd dat
+// EnsureDefaults en EffectiveLogRotation hetzelfde getal pakken.
+const (
+	DefaultPollIntervalSeconds = 30
+	DefaultLogLevel            = "info"
+	DefaultLogMaxSizeMB        = 10
+	DefaultLogMaxBackups       = 5
+	DefaultLogMaxAgeDays       = 30
+)
 
 // EffectiveLogRotation returnt de log-instellingen na default-fill. Defaults:
 // 10 MB per file, 5 backups bewaard, max 30 dagen oud. Voldoet voor een
@@ -90,13 +101,13 @@ func (c AgentConfig) EffectiveLogRotation() LogRotation {
 		r.FilePath = DefaultLogFilePath
 	}
 	if r.MaxSizeMB == 0 {
-		r.MaxSizeMB = 10
+		r.MaxSizeMB = DefaultLogMaxSizeMB
 	}
 	if r.MaxBackups == 0 {
-		r.MaxBackups = 5
+		r.MaxBackups = DefaultLogMaxBackups
 	}
 	if r.MaxAgeDays == 0 {
-		r.MaxAgeDays = 30
+		r.MaxAgeDays = DefaultLogMaxAgeDays
 	}
 	return r
 }
@@ -118,32 +129,41 @@ func (c AgentConfig) ValidateLogging() error {
 	return nil
 }
 
-// EnsureLoggingDefaults vult ontbrekende logging-velden in de config met
-// hun defaults. Returnt true als er iets is gewijzigd zodat de caller weet
-// of een Save nodig is. Het idee: na de eerste agent-start staan de keys
-// expliciet in config.yml, zodat een gebruiker ze kan vinden + aanpassen
-// zonder docs te lezen.
+// EnsureDefaults vult ontbrekende agent-velden in de config met hun
+// defaults. Returnt true als er iets is gewijzigd zodat de caller weet
+// of een Save nodig is. Het idee: na de eerste agent-start staan álle
+// keys expliciet in config.yml, zodat een gebruiker ze kan vinden +
+// aanpassen zonder docs te lezen.
 //
-// Note: 0 wordt hier als 'unset' behandeld, gelijk aan EffectiveLogRotation.
-// Een gebruiker die expliciet 0 wil persisten kan dat niet — dat is geen
-// zinvolle waarde voor deze velden (size 0 = onmiddellijk roteren, age 0 =
-// nooit verwijderen op leeftijd; conflicteert met defaults).
-func EnsureLoggingDefaults(cfg *File) bool {
+// Note: 0 / "" worden hier als 'unset' behandeld, gelijk aan
+// EffectiveLogRotation. Een gebruiker die expliciet 0 wil persisten kan dat
+// niet — dat is geen zinvolle waarde voor deze velden (size 0 = onmiddellijk
+// roteren, age 0 = nooit verwijderen op leeftijd, poll 0 = drukke loop;
+// conflicteert met defaults).
+func EnsureDefaults(cfg *File) bool {
 	changed := false
+	if cfg.Agent.PollIntervalSeconds == 0 {
+		cfg.Agent.PollIntervalSeconds = DefaultPollIntervalSeconds
+		changed = true
+	}
+	if cfg.Agent.LogLevel == "" {
+		cfg.Agent.LogLevel = DefaultLogLevel
+		changed = true
+	}
 	if cfg.Agent.LogFilePath == "" {
 		cfg.Agent.LogFilePath = DefaultLogFilePath
 		changed = true
 	}
 	if cfg.Agent.LogMaxSizeMB == 0 {
-		cfg.Agent.LogMaxSizeMB = 10
+		cfg.Agent.LogMaxSizeMB = DefaultLogMaxSizeMB
 		changed = true
 	}
 	if cfg.Agent.LogMaxBackups == 0 {
-		cfg.Agent.LogMaxBackups = 5
+		cfg.Agent.LogMaxBackups = DefaultLogMaxBackups
 		changed = true
 	}
 	if cfg.Agent.LogMaxAgeDays == 0 {
-		cfg.Agent.LogMaxAgeDays = 30
+		cfg.Agent.LogMaxAgeDays = DefaultLogMaxAgeDays
 		changed = true
 	}
 	return changed
