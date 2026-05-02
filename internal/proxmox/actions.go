@@ -26,8 +26,9 @@ const (
 	ActionSuspend  Action = "suspend"
 	ActionResume   Action = "resume"
 
-	ActionSnapshotCreate Action = "snapshot.create"
-	ActionSnapshotDelete Action = "snapshot.delete"
+	ActionSnapshotCreate   Action = "snapshot.create"
+	ActionSnapshotDelete   Action = "snapshot.delete"
+	ActionSnapshotRollback Action = "snapshot.rollback"
 )
 
 // IsPowerAction rapporteert of de action een guest power-state-actie is
@@ -43,7 +44,7 @@ func (a Action) IsPowerAction() bool {
 // IsSnapshotAction rapporteert of de action via een /snapshot-endpoint loopt.
 func (a Action) IsSnapshotAction() bool {
 	switch a {
-	case ActionSnapshotCreate, ActionSnapshotDelete:
+	case ActionSnapshotCreate, ActionSnapshotDelete, ActionSnapshotRollback:
 		return true
 	}
 	return false
@@ -99,6 +100,20 @@ func (c *Client) DeleteSnapshot(ctx context.Context, kind GuestKind, node string
 	}
 	if err := c.deleteJSON(ctx, path, &wrapper); err != nil {
 		return "", fmt.Errorf("proxmox snapshot.delete %s/%d %s: %w", kind, vmid, name, err)
+	}
+	return wrapper.Data, nil
+}
+
+// RollbackSnapshot POST /api2/json/nodes/{node}/{kind}/{vmid}/snapshot/{name}/rollback.
+// Returnt de UPID. Proxmox verwijdert tijdens rollback alle snapshots ná deze
+// in de chain — caller (UI) communiceert dat aan de gebruiker.
+func (c *Client) RollbackSnapshot(ctx context.Context, kind GuestKind, node string, vmid int, name string) (string, error) {
+	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/snapshot/%s/rollback", node, kind, vmid, url.PathEscape(name))
+	var wrapper struct {
+		Data string `json:"data"`
+	}
+	if err := c.postJSON(ctx, path, nil, &wrapper); err != nil {
+		return "", fmt.Errorf("proxmox snapshot.rollback %s/%d %s: %w", kind, vmid, name, err)
 	}
 	return wrapper.Data, nil
 }
