@@ -118,10 +118,12 @@ func (c *Client) RollbackSnapshot(ctx context.Context, kind GuestKind, node stri
 	return wrapper.Data, nil
 }
 
-// SnapshotNamePattern is dezelfde validatie die Proxmox toepast op snapname.
-// Eerste teken letter, daarna [a-zA-Z0-9_-]{0,39}. Mismatch = 400 van Proxmox;
-// vóór de roundtrip checken geeft een duidelijker fout in iOS.
-var SnapshotNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{0,39}$`)
+// SnapshotNamePattern is dezelfde validatie die Proxmox toepast op snapname
+// (`[a-z][a-z0-9_-]+/i` in PVE::JSONSchema; min 2 chars totaal). Lengte
+// gemaximeerd op 40 als pragmatische cap — Proxmox stelt zelf geen max.
+// Mismatch = 400 van Proxmox; vóór de roundtrip checken geeft een
+// duidelijker fout in iOS.
+var SnapshotNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{1,39}$`)
 
 type TaskStatus struct {
 	UPID       string

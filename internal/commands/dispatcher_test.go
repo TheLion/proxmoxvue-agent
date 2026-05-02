@@ -297,6 +297,15 @@ func TestHandle_SnapshotCreate_InvalidName_Fails(t *testing.T) {
 	if store.completed[12].status != "failed" {
 		t.Errorf("status=%q", store.completed[12].status)
 	}
+
+	// Eén-char naam — Proxmox eist minstens 2 chars (regex `[a-z][a-z0-9_-]+`).
+	cmd = newSnapshotCreateCmd(15, "qemu", "n1", 112, "a", "", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if store.completed[15].status != "failed" {
+		t.Errorf("one-char name: status=%q", store.completed[15].status)
+	}
 }
 
 func newSnapshotDeleteCmd(id int64, guestKind, node string, vmid int, name string) supabase.Command {
