@@ -15,6 +15,7 @@ import (
 
 	"github.com/TheLion/proxmoxvue-agent/internal/commands"
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
+	"github.com/TheLion/proxmoxvue-agent/internal/keysync"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
@@ -61,17 +62,35 @@ func Start(ctx context.Context, configPath, version string) error {
 		interval = time.Duration(cfg.Agent.PollIntervalSeconds) * time.Second
 	}
 
+	// === HPKE keypair auto-heal ===
+	// Pre-#1476 installs (and any config that lost its private_key) need
+	// a keypair before the dispatcher can decrypt LXC create-passwords.
+	// Auto-heal: generate locally, persist, upload the matching public
+	// key — same effect as `--rotate-key`, just driven by an empty
+	// private_key field instead of explicit user request.
+	privateKeyB64, generated, ksErr := keysync.EnsurePrivateKey(&cfg, configPath)
+	if ksErr != nil {
+		return fmt.Errorf("ensure private key: %w", ksErr)
+	}
+	if generated {
+		slog.Info("private_key was missing — generated new keypair, uploading public key")
+		if upErr := keysync.UploadPublicKey(ctx, sb, cfg.Supabase.ClusterID, privateKeyB64); upErr != nil {
+			// Best-effort: agent keeps running, but iOS LXC creates will
+			// fail until the public key is uploaded. Retry happens at
+			// next restart since the upload is idempotent.
+			slog.Warn("failed to upload public key after auto-heal", "error", upErr.Error())
+		} else {
+			slog.Info("public key uploaded — LXC create-passwords can now be decrypted")
+		}
+	}
+
 	// === Command pipeline (alongside the status-push ticker). ===
 	dispatcher := commands.New(pve, sb)
-	if cfg.Supabase.PrivateKey != "" {
-		privBytes, decodeErr := base64.StdEncoding.DecodeString(cfg.Supabase.PrivateKey)
-		if decodeErr != nil {
-			return fmt.Errorf("decode supabase.private_key: %w", decodeErr)
-		}
-		dispatcher.PrivateKey = privBytes
-	} else {
-		slog.Warn("no private_key in config — LXC create-passwords cannot be decrypted (re-run --register)")
+	privBytes, decodeErr := base64.StdEncoding.DecodeString(privateKeyB64)
+	if decodeErr != nil {
+		return fmt.Errorf("decode supabase.private_key: %w", decodeErr)
 	}
+	dispatcher.PrivateKey = privBytes
 	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID)
 	if err != nil {
 		return fmt.Errorf("subscribe commands: %w", err)

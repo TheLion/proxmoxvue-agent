@@ -12,11 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"encoding/base64"
-
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
-	agentcrypto "github.com/TheLion/proxmoxvue-agent/internal/crypto"
 	"github.com/TheLion/proxmoxvue-agent/internal/enroll"
+	"github.com/TheLion/proxmoxvue-agent/internal/keysync"
 	"github.com/TheLion/proxmoxvue-agent/internal/runtime"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -48,6 +46,8 @@ func main() {
 	switch os.Args[1] {
 	case "--register", "register":
 		runRegister(os.Args[2:])
+	case "--rotate-key", "rotate-key":
+		runRotateKey(os.Args[2:])
 	case "--run", "run":
 		runAgent(os.Args[2:])
 	case "--version", "version":
@@ -66,10 +66,11 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "commands:")
 	fmt.Fprintln(os.Stderr, "  --register CODE   enroll this host against the ProxmoxVue backend")
+	fmt.Fprintln(os.Stderr, "  --rotate-key      generate a fresh HPKE keypair and upload the public key")
 	fmt.Fprintln(os.Stderr, "  --run             run the long-lived agent loop (used by systemd)")
 	fmt.Fprintln(os.Stderr, "  --version         print version")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "flags for --register and --run:")
+	fmt.Fprintln(os.Stderr, "flags for --register, --rotate-key, and --run:")
 	fmt.Fprintln(os.Stderr, "  --config PATH          config path (default /etc/proxmoxvue-agent/config.yml)")
 	fmt.Fprintln(os.Stderr, "  --project-ref REF      Supabase project ref (register only)")
 }
@@ -189,24 +190,15 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	// Reuse the existing PrivateKey if present — re-register must not
-	// rotate the keypair, otherwise already-encrypted payloads can no
-	// longer be decrypted. Only generate when absent.
-	privateKeyB64 := cfg.Supabase.PrivateKey
-	if privateKeyB64 == "" {
-		privBytes, _, err := agentcrypto.GenerateKeypair()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to generate keypair: %v\n", err)
-			os.Exit(1)
-		}
-		privateKeyB64 = base64.StdEncoding.EncodeToString(privBytes)
-	}
-
+	// Replace the Supabase block — keep proxmox + agent settings as they
+	// were. Existing private_key (if any) is preserved by EnsurePrivateKey
+	// below; re-register must not rotate the keypair, otherwise already-
+	// encrypted payloads can no longer be decrypted.
 	cfg.Supabase = config.SupabaseConfig{
 		ProjectRef:   result.ProjectRef,
 		ClusterID:    result.ClusterID,
 		RefreshToken: result.RefreshToken,
-		PrivateKey:   privateKeyB64,
+		PrivateKey:   cfg.Supabase.PrivateKey, // preserved across re-register
 	}
 	config.EnsureDefaults(&cfg)
 
@@ -215,14 +207,24 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
+	// Generate keypair if missing (first-time enrollment) and persist it.
+	privateKeyB64, _, err := keysync.EnsurePrivateKey(&cfg, *configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to ensure keypair: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Upload the public key to clusters.public_key so iOS can send
 	// LXC passwords E2E-encrypted (#1476). Failure here is not fatal —
 	// the iOS app then shows "agent update needed" on LXC create and
-	// the user can manually re-run --register.
-	if err := uploadPublicKey(cfg, privateKeyB64); err != nil {
+	// the user can manually re-run --register or --rotate-key.
+	sb := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := keysync.UploadPublicKey(ctx, sb, cfg.Supabase.ClusterID, privateKeyB64); err != nil {
 		fmt.Fprintf(os.Stderr, "warn: failed to upload public key: %v\n", err)
 		fmt.Fprintln(os.Stderr, "      cloud-path LXC creates will fail until this succeeds;")
-		fmt.Fprintln(os.Stderr, "      run --register again once Supabase is reachable.")
+		fmt.Fprintln(os.Stderr, "      run --register or --rotate-key once Supabase is reachable.")
 	}
 
 	fmt.Printf("registered cluster %s (host %s), config written to %s\n", result.ClusterID, result.HostID, *configPath)
@@ -236,26 +238,47 @@ func runRegister(args []string) {
 		fmt.Println("    verify_tls: false")
 		fmt.Println("then: systemctl restart proxmoxvue-agent")
 	} else {
-		fmt.Println("Proxmox-config staat al klaar — herstart de agent:")
+		fmt.Println("Proxmox config is ready — restart the agent:")
 		fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
 		fmt.Println("  or: proxmoxvue-agent --run  (foreground)")
 	}
 }
 
-// uploadPublicKey derives the public key from the persisted private
-// key and writes it to clusters.public_key. Idempotent — safe to
-// re-run after a network failure.
-func uploadPublicKey(cfg config.File, privateKeyB64 string) error {
-	privBytes, err := base64.StdEncoding.DecodeString(privateKeyB64)
-	if err != nil {
-		return fmt.Errorf("decode private key: %w", err)
+// runRotateKey generates a fresh HPKE keypair, persists the private key
+// to config.yml, and uploads the matching public key to
+// clusters.public_key. Existing private key is overwritten — only useful
+// when the operator suspects key compromise or when migrating from a
+// pre-#1476 install where no keypair was ever generated.
+//
+// Note: rotating the key invalidates all previously-issued ciphertexts.
+// LXC create-passwords are always freshly encrypted by the iOS app, so
+// this has no effect on already-completed operations.
+func runRotateKey(args []string) {
+	fs := flag.NewFlagSet("rotate-key", flag.ExitOnError)
+	configPath := fs.String("config", defaultConfigPath, "path to config file")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
 	}
-	pubBytes, err := agentcrypto.PublicKeyFromPrivate(privBytes)
+
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		return fmt.Errorf("derive public key: %w", err)
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
 	}
-	client := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
+	if cfg.Supabase.ProjectRef == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
+		fmt.Fprintln(os.Stderr, "config is missing Supabase enrollment fields — run --register first")
+		os.Exit(1)
+	}
+
+	sb := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return client.UploadClusterPublicKey(ctx, cfg.Supabase.ClusterID, pubBytes)
+
+	if _, err := keysync.RotateKey(ctx, &cfg, *configPath, sb); err != nil {
+		fmt.Fprintf(os.Stderr, "rotate-key failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("rotated HPKE keypair, public key uploaded to cluster")
+	fmt.Println("restart the agent to pick up the new private key:")
+	fmt.Println("  systemctl restart proxmoxvue-agent")
 }
