@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- E2E-encryptie van LXC create-passwords via HPKE (Curve25519 + ChaCha20Poly1305,
+  RFC 9180) — `--register` genereert een X25519 keypair, uploadt de public key
+  naar `clusters.public_key`, en de dispatcher decrypteert `password_enc`
+  met de in `config.yml` opgeslagen private key. Plaintext-`password`
+  blijft 1 release als fallback met WARN-log voor pre-#1476 iOS-builds (#1476).
 - Initial agent skeleton with `--register CODE` enrollment flow
 - Config loading/saving (`/etc/proxmoxvue-agent/config.yml`, mode `0600`)
 - Redacting `String()` methods on credential-bearing structs so

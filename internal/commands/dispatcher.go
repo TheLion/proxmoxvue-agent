@@ -3,11 +3,14 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	agentcrypto "github.com/TheLion/proxmoxvue-agent/internal/crypto"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
@@ -40,6 +43,13 @@ type Dispatcher struct {
 	// was te krap; 5 min dekt ook trage shutdowns zonder de UX te frustreren
 	// (iOS toont eigen spinner-state) (#1419).
 	ActionTimeout time.Duration
+
+	// PrivateKey is de raw X25519 HPKE-private-key van deze cluster. Wanneer
+	// gezet, ontcijfert de dispatcher `password_enc`-velden in lxc.create-
+	// payloads (#1476). Nil → de dispatcher accepteert alleen plaintext-
+	// password (legacy-pad, deprecated). Caller zet dit veld direct na
+	// New() — niet in de constructor om bestaande callers niet te breken.
+	PrivateKey []byte
 }
 
 func New(pve ProxmoxActor, store CommandStore) *Dispatcher {
@@ -67,10 +77,14 @@ type commandPayload struct {
 	DiskSizeGB    int    `json:"disk_size_gb,omitempty"`
 	NetworkBridge string `json:"network_bridge,omitempty"`
 
-	// lxc.create-specifiek. Password is plaintext (MVP-keuze, zie row 1476).
+	// lxc.create-specifiek. PasswordEnc is base64(encapsulated_key||
+	// ciphertext) HPKE-sealed met de cluster public_key (#1476).
+	// Password (plaintext) is een tijdelijke fallback voor pre-#1476
+	// iOS-builds — in een volgende release verwijderen.
 	Hostname     string `json:"hostname,omitempty"`
 	OSTemplate   string `json:"ostemplate,omitempty"`
 	Password     string `json:"password,omitempty"`
+	PasswordEnc  string `json:"password_enc,omitempty"`
 	Unprivileged bool   `json:"unprivileged,omitempty"`
 
 	// guest.delete-specifiek.
@@ -220,9 +234,13 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 				NetworkBridge: p.NetworkBridge,
 			})
 		case proxmox.ActionLXCCreate:
+			plaintextPw, pwErr := d.resolveLXCPassword(p)
+			if pwErr != nil {
+				return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": pwErr.Error()})
+			}
 			upid, err = d.pve.CreateLXC(ctx, proxmox.CreateLXCSpec{
 				Node: p.Node, VMID: p.VMID, Hostname: p.Hostname,
-				OSTemplate: p.OSTemplate, Password: p.Password,
+				OSTemplate: p.OSTemplate, Password: plaintextPw,
 				Cores: p.Cores, MemoryMB: p.MemoryMB,
 				DiskStorage: p.DiskStorage, DiskSizeGB: p.DiskSizeGB,
 				NetworkBridge: p.NetworkBridge, Unprivileged: p.Unprivileged,
@@ -259,4 +277,31 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	}
 	slog.Info("command done", "id", cmd.ID, "status", status, "exitstatus", st.ExitStatus)
 	return nil
+}
+
+// resolveLXCPassword bepaalt de plaintext-LXC-password uit de payload.
+// Voorkeur: encrypted (`password_enc`) → HPKE-decrypt met agent's private
+// key. Fallback: plaintext (`password`) — alleen voor backwards-compat met
+// pre-#1476 iOS-builds, met WARN-log zodat we kunnen monitoren wanneer
+// die fallback verdwijnt en we het plaintext-pad kunnen verwijderen.
+func (d *Dispatcher) resolveLXCPassword(p commandPayload) (string, error) {
+	if p.PasswordEnc != "" {
+		if d.PrivateKey == nil {
+			return "", errors.New("password_enc received but agent has no private key configured (re-run --register)")
+		}
+		raw, err := base64.StdEncoding.DecodeString(p.PasswordEnc)
+		if err != nil {
+			return "", fmt.Errorf("decode password_enc: %w", err)
+		}
+		plaintext, err := agentcrypto.Decrypt(d.PrivateKey, raw)
+		if err != nil {
+			return "", fmt.Errorf("decrypt password_enc: %w", err)
+		}
+		return string(plaintext), nil
+	}
+	if p.Password != "" {
+		slog.Warn("lxc.create using plaintext password (deprecated; iOS pre-#1476)")
+		return p.Password, nil
+	}
+	return "", errors.New("missing password (neither password_enc nor password set)")
 }

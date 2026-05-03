@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,15 @@ func Start(ctx context.Context, configPath, version string) error {
 
 	// === Command pipeline (naast de status-push-ticker). ===
 	dispatcher := commands.New(pve, sb)
+	if cfg.Supabase.PrivateKey != "" {
+		privBytes, decodeErr := base64.StdEncoding.DecodeString(cfg.Supabase.PrivateKey)
+		if decodeErr != nil {
+			return fmt.Errorf("decode supabase.private_key: %w", decodeErr)
+		}
+		dispatcher.PrivateKey = privBytes
+	} else {
+		slog.Warn("no private_key in config — LXC create-passwords kunnen niet ontcijferd worden (re-run --register)")
+	}
 	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID)
 	if err != nil {
 		return fmt.Errorf("subscribe commands: %w", err)

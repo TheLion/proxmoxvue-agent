@@ -176,9 +176,10 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateVMSpec) (string, error
 	return wrapper.Data, nil
 }
 
-// CreateLXCSpec bevat de minimale velden voor een LXC-container-create. Het
-// password-veld bevat plaintext credentials — caller moet ervoor zorgen dat
-// dit veld niet wordt gelogd. Future: zie row 1476 (E2E-encryptie via cluster-key).
+// CreateLXCSpec bevat de minimale velden voor een LXC-container-create.
+// Het Password-veld bevat plaintext credentials op het moment dat
+// CreateLXC wordt aangeroepen — bovenliggende dispatcher heeft het al
+// HPKE-decrypt (#1476). Niet loggen.
 type CreateLXCSpec struct {
 	Node          string
 	VMID          int

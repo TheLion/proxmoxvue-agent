@@ -24,14 +24,26 @@ type SupabaseConfig struct {
 	ProjectRef   string `yaml:"project_ref"`
 	ClusterID    string `yaml:"cluster_id"`
 	RefreshToken string `yaml:"refresh_token"`
+	// PrivateKey is een base64-encoded raw X25519 private key (32 bytes)
+	// voor HPKE-decryptie van LXC create-passwords (#1476). Wordt
+	// gegenereerd bij --register als hij ontbreekt; de bijbehorende
+	// public key gaat naar clusters.public_key in Supabase. Lekkage
+	// van deze key compromitteert lopend-versleutelde passwords; mode
+	// 0600 op config.yml beschermt 'm. Re-keying = nieuwe --register.
+	PrivateKey string `yaml:"private_key,omitempty"`
 }
 
 func (c SupabaseConfig) String() string {
-	masked := "<unset>"
+	maskedToken := "<unset>"
 	if c.RefreshToken != "" {
-		masked = "[REDACTED]"
+		maskedToken = "[REDACTED]"
 	}
-	return fmt.Sprintf("{ProjectRef:%s ClusterID:%s RefreshToken:%s}", c.ProjectRef, c.ClusterID, masked)
+	maskedKey := "<unset>"
+	if c.PrivateKey != "" {
+		maskedKey = "[REDACTED]"
+	}
+	return fmt.Sprintf("{ProjectRef:%s ClusterID:%s RefreshToken:%s PrivateKey:%s}",
+		c.ProjectRef, c.ClusterID, maskedToken, maskedKey)
 }
 
 type ProxmoxConfig struct {
@@ -205,6 +217,7 @@ var fieldHeadComments = map[string]string{
 	"supabase.project_ref":        "Supabase project ref. Set by --register.",
 	"supabase.cluster_id":         "Cluster UUID issued by the backend during enrollment.",
 	"supabase.refresh_token":      "Long-lived refresh token. Re-run --register if revoked.",
+	"supabase.private_key":        "X25519 private key (base64) for HPKE decrypt of LXC passwords. Generated at --register; treat as a secret.",
 	"proxmox":                     "Direct connection to the local Proxmox VE API.",
 	"proxmox.api_url":             "Proxmox API endpoint, e.g. https://<host>:8006.",
 	"proxmox.api_token_id":        "Token ID in the form user@realm!tokenid.",

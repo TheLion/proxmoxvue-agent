@@ -2,12 +2,14 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	agentcrypto "github.com/TheLion/proxmoxvue-agent/internal/crypto"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
@@ -510,6 +512,31 @@ func newLXCCreateCmd(id int64, node string, vmid int, hostname, ostemplate, pass
 	}
 }
 
+func newLXCCreateCmdEncrypted(id int64, node string, vmid int, hostname, ostemplate, passwordEnc string, cores, memMB int, store string, diskGB int, bridge string, unprivileged bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "lxc",
+		"node":           node,
+		"vmid":           vmid,
+		"hostname":       hostname,
+		"ostemplate":     ostemplate,
+		"password_enc":   passwordEnc,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+		"unprivileged":   unprivileged,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionLXCCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
 func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
 	var captured proxmox.CreateLXCSpec
 	actor := &fakeActor{
@@ -541,6 +568,98 @@ func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
 	defer store.mu.Unlock()
 	if store.completed[31].status != "done" {
 		t.Errorf("status=%q", store.completed[31].status)
+	}
+}
+
+// Encrypted-pad: iOS sealt het wachtwoord met de cluster-public-key, agent
+// decrypteert met de private key — plaintext belandt nooit in commands.payload.
+func TestHandle_LXCCreate_Encrypted_PasswordDecryptedAndPropagated(t *testing.T) {
+	priv, pub, err := agentcrypto.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	plainPassword := "s3cret!"
+	sealed, err := agentcrypto.EncryptForTest(pub, []byte(plainPassword))
+	if err != nil {
+		t.Fatalf("EncryptForTest: %v", err)
+	}
+	encB64 := base64.StdEncoding.EncodeToString(sealed)
+
+	var captured proxmox.CreateLXCSpec
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			captured = spec
+			return "UPID:lxcnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+	d.PrivateKey = priv
+
+	cmd := newLXCCreateCmdEncrypted(32, "n1", 202, "beta-ct", "local:vztmpl/debian.tar.zst", encB64, 2, 1024, "local-lvm", 16, "vmbr0", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.Password != plainPassword {
+		t.Errorf("decrypted password = %q, want %q", captured.Password, plainPassword)
+	}
+}
+
+// Foutpad: iOS stuurt encrypted maar de agent heeft geen private key (bv.
+// agent niet --register-d na #1476). Command moet failed worden afgesloten.
+func TestHandle_LXCCreate_Encrypted_NoPrivateKey_Fails(t *testing.T) {
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			t.Fatalf("createLXC mag niet aangeroepen worden zonder private key")
+			return "", nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+	// d.PrivateKey blijft nil
+
+	cmd := newLXCCreateCmdEncrypted(33, "n1", 203, "ct", "local:vztmpl/debian.tar.zst", "AAAA", 1, 512, "local-lvm", 8, "vmbr0", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("Handle should not return an error (it should complete with failed): %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[33].status != "failed" {
+		t.Errorf("status=%q want failed", store.completed[33].status)
+	}
+}
+
+// Foutpad: zowel password_enc als password ontbreken.
+func TestHandle_LXCCreate_NoPassword_Fails(t *testing.T) {
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			t.Fatalf("createLXC mag niet aangeroepen worden zonder password")
+			return "", nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind": "lxc", "node": "n1", "vmid": 204,
+		"hostname": "ct", "ostemplate": "local:vztmpl/debian.tar.zst",
+		"cores": 1, "memory_mb": 512, "disk_storage": "local-lvm",
+		"disk_size_gb": 8, "network_bridge": "vmbr0", "unprivileged": true,
+	})
+	cmd := supabase.Command{
+		ID: 34, HostID: "h", Kind: string(proxmox.ActionLXCCreate),
+		Payload: payload, Status: "pending", ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[34].status != "failed" {
+		t.Errorf("status=%q want failed", store.completed[34].status)
 	}
 }
 

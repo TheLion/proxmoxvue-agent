@@ -7,4 +7,9 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+require (
+	github.com/cloudflare/circl v1.6.3 // indirect
+	golang.org/x/crypto v0.30.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+)

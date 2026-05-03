@@ -10,8 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	"encoding/base64"
 
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
+	agentcrypto "github.com/TheLion/proxmoxvue-agent/internal/crypto"
 	"github.com/TheLion/proxmoxvue-agent/internal/enroll"
 	"github.com/TheLion/proxmoxvue-agent/internal/runtime"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
@@ -185,16 +189,40 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
+	// Hergebruik bestaande PrivateKey als die er al is — re-register mag
+	// de keypair niet rouleren, anders kunnen al-versleutelde payloads
+	// niet meer ontcijferd worden. Genereer alleen wanneer afwezig.
+	privateKeyB64 := cfg.Supabase.PrivateKey
+	if privateKeyB64 == "" {
+		privBytes, _, err := agentcrypto.GenerateKeypair()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to generate keypair: %v\n", err)
+			os.Exit(1)
+		}
+		privateKeyB64 = base64.StdEncoding.EncodeToString(privBytes)
+	}
+
 	cfg.Supabase = config.SupabaseConfig{
 		ProjectRef:   result.ProjectRef,
 		ClusterID:    result.ClusterID,
 		RefreshToken: result.RefreshToken,
+		PrivateKey:   privateKeyB64,
 	}
 	config.EnsureDefaults(&cfg)
 
 	if err := config.Save(*configPath, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Public key uploaden naar clusters.public_key zodat iOS de
+	// LXC-passwords E2E-encrypted kan versturen (#1476). Failure hier is
+	// geen fatal — de iOS-app toont dan "agent-update nodig" bij LXC-create
+	// en de gebruiker kan handmatig --register opnieuw draaien.
+	if err := uploadPublicKey(cfg, privateKeyB64); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: kon public key niet uploaden: %v\n", err)
+		fmt.Fprintln(os.Stderr, "      LXC-creates via cloud-pad zullen falen tot dit lukt;")
+		fmt.Fprintln(os.Stderr, "      voer --register opnieuw uit zodra Supabase weer bereikbaar is.")
 	}
 
 	fmt.Printf("registered cluster %s (host %s), config written to %s\n", result.ClusterID, result.HostID, *configPath)
@@ -212,4 +240,22 @@ func runRegister(args []string) {
 		fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
 		fmt.Println("  of: proxmoxvue-agent --run  (foreground)")
 	}
+}
+
+// uploadPublicKey leidt de public key af van de gepersisteerde private key
+// en schrijft 'm naar clusters.public_key. Idempotent — re-runnen na
+// netwerkfailure mag.
+func uploadPublicKey(cfg config.File, privateKeyB64 string) error {
+	privBytes, err := base64.StdEncoding.DecodeString(privateKeyB64)
+	if err != nil {
+		return fmt.Errorf("decode private key: %w", err)
+	}
+	pubBytes, err := agentcrypto.PublicKeyFromPrivate(privBytes)
+	if err != nil {
+		return fmt.Errorf("derive public key: %w", err)
+	}
+	client := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return client.UploadClusterPublicKey(ctx, cfg.Supabase.ClusterID, pubBytes)
 }
