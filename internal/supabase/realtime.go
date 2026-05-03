@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,12 +20,13 @@ const (
 	dialTimeout       = 10 * time.Second
 )
 
-// SubscribeCommands opent een Realtime-kanaal voor INSERTs op public.commands
-// gefilterd op host_id. Retourneert een channel met Command-events.
-// De goroutine blijft draaien tot ctx cancelt; reconnects zijn intern.
-func (c *Client) SubscribeCommands(ctx context.Context, hostID string) (<-chan Command, error) {
+// SubscribeCommands opens a Realtime channel for INSERTs on
+// public.commands filtered by cluster_id. Returns a channel with
+// Command events. The goroutine keeps running until ctx is cancelled;
+// reconnects are internal.
+func (c *Client) SubscribeCommands(ctx context.Context, clusterID string) (<-chan Command, error) {
 	out := make(chan Command, 16)
-	raw := c.subscribeTable(ctx, hostID, "commands")
+	raw := c.subscribeTable(ctx, clusterID, "commands")
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -43,12 +45,12 @@ func (c *Client) SubscribeCommands(ctx context.Context, hostID string) (<-chan C
 	return out, nil
 }
 
-// SubscribeReadCommands is het read-RPC equivalent van SubscribeCommands.
-// Aparte channel zodat de read-dispatcher onafhankelijk van de write-dispatcher
-// kan draaien — failures aan één kant raken de andere niet.
-func (c *Client) SubscribeReadCommands(ctx context.Context, hostID string) (<-chan ReadCommand, error) {
+// SubscribeReadCommands is the read-RPC equivalent of SubscribeCommands.
+// Separate channel so the read-dispatcher can run independently from
+// the write-dispatcher — failures on one side don't affect the other.
+func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string) (<-chan ReadCommand, error) {
 	out := make(chan ReadCommand, 16)
-	raw := c.subscribeTable(ctx, hostID, "read_commands")
+	raw := c.subscribeTable(ctx, clusterID, "read_commands")
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -67,30 +69,32 @@ func (c *Client) SubscribeReadCommands(ctx context.Context, hostID string) (<-ch
 	return out, nil
 }
 
-// subscribeTable opent een Realtime-WS voor INSERTs op de gegeven tabel,
-// gefilterd op host_id, en pusht raw record-bytes naar het returnerende
-// channel. Reconnects zijn intern; channel sluit bij ctx-cancel.
-func (c *Client) subscribeTable(ctx context.Context, hostID, table string) <-chan json.RawMessage {
+// subscribeTable opens a Realtime WS for INSERTs on the given table,
+// filtered by cluster_id, and pushes raw record bytes onto the
+// returned channel. Reconnects are internal; the channel closes when
+// ctx is cancelled.
+func (c *Client) subscribeTable(ctx context.Context, clusterID, table string) <-chan json.RawMessage {
 	if c.realtimeURL == "" {
 		c.realtimeURL = fmt.Sprintf("wss://%s.supabase.co/realtime/v1/websocket", c.projectRef)
 	}
 	out := make(chan json.RawMessage, 16)
-	go c.runSubscription(ctx, hostID, table, out)
+	go c.runSubscription(ctx, clusterID, table, out)
 	return out
 }
 
-func (c *Client) runSubscription(ctx context.Context, hostID, table string, out chan<- json.RawMessage) {
+func (c *Client) runSubscription(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) {
 	defer close(out)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := c.subscribeOnce(ctx, hostID, table, out); err != nil {
-			// Idle-disconnect/EOF is normaal voor lange WS — server-side
-			// keep-alive timeout of netwerktransitie. Reconnect via backoff
-			// is voldoende; geen reden om elke disconnect te WARN-loggen.
-			// Echte rejections (Unauthorized, channel-policy) blijven WARN.
+		if err := c.subscribeOnce(ctx, clusterID, table, out); err != nil {
+			// Idle disconnect / EOF is normal on long-lived WS —
+			// server-side keep-alive timeout or network transition.
+			// Reconnect via backoff is enough; no reason to WARN-log
+			// every disconnect. Real rejections (Unauthorized,
+			// channel-policy) stay WARN.
 			msg := err.Error()
 			if strings.Contains(msg, "EOF") || strings.Contains(msg, "ws read") {
 				slog.Debug("realtime subscription disconnected", "table", table, "err", err)
@@ -98,10 +102,13 @@ func (c *Client) runSubscription(ctx context.Context, hostID, table string, out 
 				slog.Warn("realtime subscription rejected", "table", table, "err", err)
 			}
 		}
+		// Jitter (±25%) so agents from different users don't
+		// synchronously reconnect after a Supabase outage.
+		jitter := time.Duration(rand.Int64N(int64(backoff/2))) - backoff/4
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(backoff + jitter):
 		}
 		if backoff < 30*time.Second {
 			backoff *= 2
@@ -109,18 +116,18 @@ func (c *Client) runSubscription(ctx context.Context, hostID, table string, out 
 	}
 }
 
-func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out chan<- json.RawMessage) error {
+func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) error {
 	token, err := c.access(ctx)
 	if err != nil {
 		return fmt.Errorf("get access token: %w", err)
 	}
 
-	// TODO (iteratie 2): access_token over de open channel verversen vóór
-	// expiry (~1h). Nu laten we de WS droppen bij expiry en reconnecten;
-	// dat geeft ~1 reconnect per uur op een stabiele agent.
+	// TODO (iteration 2): refresh access_token over the open channel
+	// before expiry (~1h). For now we let the WS drop on expiry and
+	// reconnect; that's about 1 reconnect per hour on a stable agent.
 
-	// Dial + join + phx_reply moeten binnen 10s rond zijn — anders is
-	// Realtime gedegradeerd en reconnecten we liever dan blijven hangen.
+	// Dial + join + phx_reply must complete within 10s — otherwise
+	// Realtime is degraded and we'd rather reconnect than hang.
 	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
 	defer dialCancel()
 
@@ -131,7 +138,7 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "bye")
 
-	topic := fmt.Sprintf("realtime:%s:%s", table, hostID)
+	topic := fmt.Sprintf("realtime:%s:%s", table, clusterID)
 	var ref int64
 	nextRef := func() string { return strconv.FormatInt(atomic.AddInt64(&ref, 1), 10) }
 
@@ -146,16 +153,17 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 						"event":  "INSERT",
 						"schema": "public",
 						"table":  table,
-						"filter": "host_id=eq." + hostID,
+						"filter": "cluster_id=eq." + clusterID,
 					},
 				},
-				// Presence aan zodat iOS-subscribers realtime zien of de agent
-				// WS-verbonden is. Zonder actieve presence kan iOS de
-				// enqueue-knop niet veilig enablen (last_seen_at is REST-based
-				// en mist WS-only disconnects).
+				// Presence on so iOS subscribers see in real time
+				// whether the agent is WS-connected. Without active
+				// presence iOS can't safely enable the enqueue button
+				// (last_seen_at is REST-based and misses WS-only
+				// disconnects).
 				"presence": map[string]any{
 					"enabled": true,
-					"key":     hostID,
+					"key":     clusterID,
 				},
 				"private": true,
 			},
@@ -168,9 +176,9 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 		return fmt.Errorf("send join: %w", err)
 	}
 
-	// Wacht op phx_reply — als Supabase RLS of config afwijst krijgen we
-	// status=error terug. Zonder deze check zou een misconfig zich als
-	// "silent success" voordoen (nooit events, geen error).
+	// Wait for phx_reply — if Supabase RLS or config rejects we get
+	// status=error back. Without this check a misconfig would behave
+	// as "silent success" (never any events, no error).
 	_, raw, err := conn.Read(dialCtx)
 	if err != nil {
 		return fmt.Errorf("wait for phx_reply: %w", err)
@@ -193,9 +201,10 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 	}
 	dialCancel()
 
-	// Track presence: zonder een expliciet track-frame ziet iOS geen
-	// presence_join, ook niet als de join-config presence enabled heeft.
-	// Best-effort — als de write faalt, vangt de read-loop de dode conn op.
+	// Track presence: without an explicit track frame iOS doesn't see
+	// any presence_join, not even when the join config has presence
+	// enabled. Best-effort — if the write fails the read loop will
+	// pick up the dead connection.
 	trackMsg := map[string]any{
 		"topic": topic,
 		"event": "presence",
@@ -203,8 +212,8 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 			"type":  "presence",
 			"event": "track",
 			"payload": map[string]any{
-				"host_id":   hostID,
-				"online_at": time.Now().UTC().Format(time.RFC3339),
+				"cluster_id": clusterID,
+				"online_at":  time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 		"ref":      nextRef(),
@@ -214,7 +223,11 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 		slog.Warn("realtime presence track failed", "err", err)
 	}
 
-	// Heartbeat-loop
+	// Heartbeat loop with ack tracking. hbSent counts hb's sent,
+	// hbAcked counts phx_reply on topic="phoenix". If sent runs ever
+	// further ahead of acked the WS is dead but not (yet) dropped —
+	// silent death we'd otherwise only notice on the next read error.
+	var hbSent, hbAcked atomic.Int64
 	hbCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -225,12 +238,23 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				_ = writeJSON(hbCtx, conn, map[string]any{
+				if err := writeJSON(hbCtx, conn, map[string]any{
 					"topic":   heartbeatTopic,
 					"event":   "heartbeat",
 					"payload": map[string]any{},
 					"ref":     nextRef(),
-				})
+				}); err != nil {
+					return
+				}
+				sent := hbSent.Add(1)
+				acked := hbAcked.Load()
+				if lag := sent - acked; lag >= 2 {
+					slog.Warn("realtime heartbeat-ack lag",
+						"table", table, "sent", sent, "acked", acked, "lag", lag)
+				} else {
+					slog.Debug("realtime heartbeat",
+						"table", table, "sent", sent, "acked", acked)
+				}
 			}
 		}
 	}()
@@ -248,6 +272,11 @@ func (c *Client) subscribeOnce(ctx context.Context, hostID, table string, out ch
 		}
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			slog.Debug("realtime bad frame", "err", err)
+			continue
+		}
+		// Heartbeat ack: phx_reply on topic="phoenix" matches our heartbeats.
+		if frame.Event == "phx_reply" && frame.Topic == heartbeatTopic {
+			hbAcked.Add(1)
 			continue
 		}
 		if frame.Event != "postgres_changes" {

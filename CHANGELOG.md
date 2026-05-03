@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- HPKE keypair auto-heal at agent startup — when `supabase.private_key`
+  is missing in config (e.g. installs from before #1476), the agent
+  generates a fresh X25519 keypair, persists the private key to
+  config.yml, and uploads the matching public key to
+  `clusters.public_key`. Replaces the previous WARN log + manual
+  re-enrollment workaround. Idempotent on retry; upload failure is
+  best-effort and re-attempted on next restart.
+- New `--rotate-key` command — generates a fresh HPKE keypair and
+  uploads the matching public key without re-running enrollment.
+  Useful for explicit key rotation or recovering from a missing
+  private_key when Supabase enrollment fields are still valid.
+- New `internal/keysync` package consolidates keypair lifecycle
+  (`EnsurePrivateKey`, `RotateKey`, `UploadPublicKey`). Reused by
+  `--register`, `--run` (auto-heal), and `--rotate-key`.
+- E2E-encryptie van LXC create-passwords via HPKE (Curve25519 + ChaCha20Poly1305,
+  RFC 9180) — `--register` genereert een X25519 keypair, uploadt de public key
+  naar `clusters.public_key`, en de dispatcher decrypteert `password_enc`
+  met de in `config.yml` opgeslagen private key. Plaintext-`password`
+  blijft 1 release als fallback met WARN-log voor pre-#1476 iOS-builds (#1476).
 - Initial agent skeleton with `--register CODE` enrollment flow
 - Config loading/saving (`/etc/proxmoxvue-agent/config.yml`, mode `0600`)
 - Redacting `String()` methods on credential-bearing structs so

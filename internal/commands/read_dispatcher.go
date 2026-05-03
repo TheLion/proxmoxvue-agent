@@ -13,25 +13,26 @@ import (
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
 
-// ProxmoxReader is de subset van proxmox.Client die de read-dispatcher gebruikt.
+// ProxmoxReader is the subset of proxmox.Client the read-dispatcher uses.
 type ProxmoxReader interface {
 	GetRaw(ctx context.Context, path string) (json.RawMessage, error)
 }
 
-// ReadCommandStore is de subset van supabase.Client die de read-dispatcher
-// gebruikt.
+// ReadCommandStore is the subset of supabase.Client the read-dispatcher uses.
 type ReadCommandStore interface {
 	ClaimReadCommand(ctx context.Context, id int64) (bool, error)
 	CompleteReadCommand(ctx context.Context, id int64, status string, result json.RawMessage, errMsg string) error
 }
 
-// readEndpointWhitelist beperkt welke Proxmox-paden iOS via de read-RPC mag
-// aanroepen. Defense in depth — de agent draait met een full-permission
-// API-token, dus zonder whitelist kan een gemanipuleerde row de agent forceren
-// om bv. /access/users uit te lezen of password-reset te triggeren.
+// readEndpointWhitelist limits which Proxmox paths iOS may call via
+// the read-RPC. Defense in depth — the agent runs with a
+// full-permission API token, so without a whitelist a tampered row
+// could force the agent to read `/access/users` or trigger a password
+// reset.
 //
-// Patterns matchen alleen wat iOS' detail-views nu daadwerkelijk via direct
-// gebruiken; uitbreiden mag, mits expliciet en read-only.
+// The patterns only match what iOS' detail views currently use over
+// the direct path; expanding is fine, provided it stays explicit and
+// read-only.
 var readEndpointWhitelist = []*regexp.Regexp{
 	regexp.MustCompile(`^/api2/json/cluster/resources$`),
 	regexp.MustCompile(`^/api2/json/cluster/status$`),
@@ -61,9 +62,9 @@ type ReadDispatcher struct {
 	pve   ProxmoxReader
 	store ReadCommandStore
 
-	// Timeout begrenst hoe lang één Proxmox-call mag duren. Reads zijn typisch
-	// <500ms; 10s is ruim genoeg voor trage clusters maar laat de iOS-poller
-	// niet hangen.
+	// Timeout caps how long a single Proxmox call may take. Reads are
+	// typically <500ms; 10s is generous enough for slow clusters
+	// without leaving the iOS poller hanging.
 	Timeout time.Duration
 }
 
@@ -75,10 +76,10 @@ func NewReadDispatcher(pve ProxmoxReader, store ReadCommandStore) *ReadDispatche
 	}
 }
 
-// Handle verwerkt één read_command: TTL-check → claim → endpoint-whitelist →
-// Proxmox GET → complete. Proxmox-fouten leiden tot een completed row met
-// status=failed. De enige error die naar boven bubbelt is wanneer claim of
-// complete zelf faalt.
+// Handle processes a single read_command: TTL check → claim →
+// endpoint whitelist → Proxmox GET → complete. Proxmox errors result
+// in a completed row with status=failed. The only error that bubbles
+// up is when claim or complete itself fails.
 func (d *ReadDispatcher) Handle(ctx context.Context, cmd supabase.ReadCommand) error {
 	if !cmd.ExpiresAt.IsZero() && time.Now().After(cmd.ExpiresAt) {
 		if ok, err := d.store.ClaimReadCommand(ctx, cmd.ID); err == nil && ok {
@@ -122,9 +123,9 @@ func (d *ReadDispatcher) Handle(ctx context.Context, cmd supabase.ReadCommand) e
 	return nil
 }
 
-// buildPath voegt query-params (uit de jsonb-kolom) toe aan endpoint.
-// Params is een platte object {key: stringOrNumber}; geneste structuren
-// worden afgewezen — Proxmox GETs gebruiken alleen flat query-strings.
+// buildPath appends query params (from the jsonb column) to endpoint.
+// Params is a flat object {key: stringOrNumber}; nested structures
+// are rejected — Proxmox GETs only use flat query strings.
 func buildPath(endpoint string, params json.RawMessage) (string, error) {
 	if len(params) == 0 || string(params) == "{}" || string(params) == "null" {
 		return endpoint, nil
@@ -142,9 +143,9 @@ func buildPath(endpoint string, params json.RawMessage) (string, error) {
 		case string:
 			q.Set(k, x)
 		case float64:
-			// json.Number zou netter zijn maar map[string]any geeft float64.
-			// Voor de Proxmox-paden in onze whitelist (limit=N, content=type)
-			// is dit voldoende.
+			// json.Number would be cleaner but map[string]any returns
+			// float64. For the Proxmox paths in our whitelist
+			// (limit=N, content=type) this is sufficient.
 			q.Set(k, strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", x), "0"), "."))
 		case bool:
 			if x {

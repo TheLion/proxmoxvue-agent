@@ -2,23 +2,67 @@ package commands
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	agentcrypto "github.com/TheLion/proxmoxvue-agent/internal/crypto"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
 
 type fakeActor struct {
-	perform func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
-	await   func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
+	perform          func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error)
+	createSnapshot   func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error)
+	deleteSnapshot   func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
+	rollbackSnapshot func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error)
+	createVM         func(ctx context.Context, spec proxmox.CreateVMSpec) (string, error)
+	createLXC        func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error)
+	deleteGuest      func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error)
+	await            func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error)
 }
 
 func (f *fakeActor) PerformAction(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, action proxmox.Action) (string, error) {
 	return f.perform(ctx, kind, node, vmid, action)
+}
+func (f *fakeActor) CreateSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error) {
+	if f.createSnapshot == nil {
+		return "", fmt.Errorf("CreateSnapshot not configured for this test")
+	}
+	return f.createSnapshot(ctx, kind, node, vmid, name, description, includeVmState)
+}
+func (f *fakeActor) DeleteSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+	if f.deleteSnapshot == nil {
+		return "", fmt.Errorf("DeleteSnapshot not configured for this test")
+	}
+	return f.deleteSnapshot(ctx, kind, node, vmid, name)
+}
+func (f *fakeActor) RollbackSnapshot(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+	if f.rollbackSnapshot == nil {
+		return "", fmt.Errorf("RollbackSnapshot not configured for this test")
+	}
+	return f.rollbackSnapshot(ctx, kind, node, vmid, name)
+}
+func (f *fakeActor) CreateVM(ctx context.Context, spec proxmox.CreateVMSpec) (string, error) {
+	if f.createVM == nil {
+		return "", fmt.Errorf("CreateVM not configured for this test")
+	}
+	return f.createVM(ctx, spec)
+}
+func (f *fakeActor) CreateLXC(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+	if f.createLXC == nil {
+		return "", fmt.Errorf("CreateLXC not configured for this test")
+	}
+	return f.createLXC(ctx, spec)
+}
+func (f *fakeActor) DeleteGuest(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
+	if f.deleteGuest == nil {
+		return "", fmt.Errorf("DeleteGuest not configured for this test")
+	}
+	return f.deleteGuest(ctx, kind, node, vmid, destroyDisks, purgeBackups)
 }
 func (f *fakeActor) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
 	return f.await(ctx, node, upid, timeout)
@@ -184,6 +228,496 @@ func TestHandle_TTLExpired_MarksExpired(t *testing.T) {
 	}
 	if store.completed[7].status != "expired" {
 		t.Errorf("status=%q want expired", store.completed[7].status)
+	}
+}
+
+func newSnapshotCreateCmd(id int64, guestKind, node string, vmid int, name, description string, includeVmState bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":      guestKind,
+		"node":            node,
+		"vmid":            vmid,
+		"name":            name,
+		"description":     description,
+		"include_vmstate": includeVmState,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionSnapshotCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_SnapshotCreate_HappyPath(t *testing.T) {
+	var captured struct {
+		kind                                  proxmox.GuestKind
+		node, name, description               string
+		vmid                                  int
+		includeVmState                        bool
+	}
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			t.Error("PerformAction should not be called for snapshot.create")
+			return "", nil
+		},
+		createSnapshot: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error) {
+			captured.kind = kind
+			captured.node = node
+			captured.vmid = vmid
+			captured.name = name
+			captured.description = description
+			captured.includeVmState = includeVmState
+			return "UPID:snap", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newSnapshotCreateCmd(11, "qemu", "n1", 112, "snap_alpha", "before upgrade", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.kind != proxmox.GuestKindQEMU || captured.node != "n1" || captured.vmid != 112 ||
+		captured.name != "snap_alpha" || captured.description != "before upgrade" || !captured.includeVmState {
+		t.Errorf("unexpected snapshot args: %+v", captured)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[11].status != "done" {
+		t.Errorf("status=%q", store.completed[11].status)
+	}
+	if store.completed[11].result["upid"] != "UPID:snap" {
+		t.Errorf("upid=%v", store.completed[11].result["upid"])
+	}
+}
+
+func TestHandle_SnapshotCreate_InvalidName_Fails(t *testing.T) {
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			return "", nil
+		},
+		createSnapshot: func(context.Context, proxmox.GuestKind, string, int, string, string, bool) (string, error) {
+			t.Error("CreateSnapshot should not be called for invalid name")
+			return "", nil
+		},
+		await: func(context.Context, string, string, time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	// Starting with a digit is invalid per Proxmox rules.
+	cmd := newSnapshotCreateCmd(12, "qemu", "n1", 112, "1bad", "", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if store.completed[12].status != "failed" {
+		t.Errorf("status=%q", store.completed[12].status)
+	}
+
+	// Eén-char naam — Proxmox eist minstens 2 chars (regex `[a-z][a-z0-9_-]+`).
+	cmd = newSnapshotCreateCmd(15, "qemu", "n1", 112, "a", "", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if store.completed[15].status != "failed" {
+		t.Errorf("one-char name: status=%q", store.completed[15].status)
+	}
+}
+
+func newSnapshotDeleteCmd(id int64, guestKind, node string, vmid int, name string) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind": guestKind,
+		"node":       node,
+		"vmid":       vmid,
+		"name":       name,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionSnapshotDelete),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_SnapshotDelete_HappyPath(t *testing.T) {
+	var capturedName string
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			t.Error("PerformAction should not be called for snapshot.delete")
+			return "", nil
+		},
+		deleteSnapshot: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+			capturedName = name
+			return "UPID:del", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newSnapshotDeleteCmd(13, "qemu", "n1", 112, "snap_alpha")
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if capturedName != "snap_alpha" {
+		t.Errorf("captured name=%q want snap_alpha", capturedName)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[13].status != "done" {
+		t.Errorf("status=%q", store.completed[13].status)
+	}
+	if store.completed[13].result["upid"] != "UPID:del" {
+		t.Errorf("upid=%v", store.completed[13].result["upid"])
+	}
+}
+
+func newSnapshotRollbackCmd(id int64, guestKind, node string, vmid int, name string, includeVmState bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":      guestKind,
+		"node":            node,
+		"vmid":            vmid,
+		"name":            name,
+		"include_vmstate": includeVmState,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionSnapshotRollback),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_SnapshotRollback_HappyPath(t *testing.T) {
+	var capturedName string
+	actor := &fakeActor{
+		perform: func(context.Context, proxmox.GuestKind, string, int, proxmox.Action) (string, error) {
+			t.Error("PerformAction should not be called for snapshot.rollback")
+			return "", nil
+		},
+		rollbackSnapshot: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, name string) (string, error) {
+			capturedName = name
+			return "UPID:rb", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newSnapshotRollbackCmd(14, "qemu", "n1", 112, "snap_alpha", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if capturedName != "snap_alpha" {
+		t.Errorf("captured name=%q want snap_alpha", capturedName)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[14].status != "done" {
+		t.Errorf("status=%q", store.completed[14].status)
+	}
+	if store.completed[14].result["upid"] != "UPID:rb" {
+		t.Errorf("upid=%v", store.completed[14].result["upid"])
+	}
+}
+
+func newVMCreateCmd(id int64, node string, vmid int, name string, cores, memMB int, store string, diskGB int, bridge string) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "qemu",
+		"node":           node,
+		"vmid":           vmid,
+		"name":           name,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionVMCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_VMCreate_HappyPath(t *testing.T) {
+	var captured proxmox.CreateVMSpec
+	actor := &fakeActor{
+		createVM: func(ctx context.Context, spec proxmox.CreateVMSpec) (string, error) {
+			captured = spec
+			return "UPID:vmnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newVMCreateCmd(30, "n1", 200, "alpha", 2, 2048, "local-lvm", 20, "vmbr0")
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := proxmox.CreateVMSpec{Node: "n1", VMID: 200, Name: "alpha", Cores: 2, MemoryMB: 2048, DiskStorage: "local-lvm", DiskSizeGB: 20, NetworkBridge: "vmbr0"}
+	if captured != want {
+		t.Errorf("spec mismatch: got %+v, want %+v", captured, want)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[30].status != "done" {
+		t.Errorf("status=%q", store.completed[30].status)
+	}
+}
+
+func newLXCCreateCmd(id int64, node string, vmid int, hostname, ostemplate, password string, cores, memMB int, store string, diskGB int, bridge string, unprivileged bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "lxc",
+		"node":           node,
+		"vmid":           vmid,
+		"hostname":       hostname,
+		"ostemplate":     ostemplate,
+		"password":       password,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+		"unprivileged":   unprivileged,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionLXCCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func newLXCCreateCmdEncrypted(id int64, node string, vmid int, hostname, ostemplate, passwordEnc string, cores, memMB int, store string, diskGB int, bridge string, unprivileged bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     "lxc",
+		"node":           node,
+		"vmid":           vmid,
+		"hostname":       hostname,
+		"ostemplate":     ostemplate,
+		"password_enc":   passwordEnc,
+		"cores":          cores,
+		"memory_mb":      memMB,
+		"disk_storage":   store,
+		"disk_size_gb":   diskGB,
+		"network_bridge": bridge,
+		"unprivileged":   unprivileged,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionLXCCreate),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
+	var captured proxmox.CreateLXCSpec
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			captured = spec
+			return "UPID:lxcnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newLXCCreateCmd(31, "n1", 201, "alpha-ct", "local:vztmpl/debian.tar.zst", "s3cret!", 1, 512, "local-lvm", 8, "vmbr0", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	want := proxmox.CreateLXCSpec{
+		Node: "n1", VMID: 201, Hostname: "alpha-ct",
+		OSTemplate: "local:vztmpl/debian.tar.zst", Password: "s3cret!",
+		Cores: 1, MemoryMB: 512, DiskStorage: "local-lvm", DiskSizeGB: 8,
+		NetworkBridge: "vmbr0", Unprivileged: true,
+	}
+	if captured != want {
+		t.Errorf("spec mismatch: got %+v, want %+v", captured, want)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[31].status != "done" {
+		t.Errorf("status=%q", store.completed[31].status)
+	}
+}
+
+// Encrypted path: iOS seals the password with the cluster public
+// key, the agent decrypts with the private key — plaintext never
+// lands in commands.payload.
+func TestHandle_LXCCreate_Encrypted_PasswordDecryptedAndPropagated(t *testing.T) {
+	priv, pub, err := agentcrypto.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair: %v", err)
+	}
+	plainPassword := "s3cret!"
+	sealed, err := agentcrypto.EncryptForTest(pub, []byte(plainPassword))
+	if err != nil {
+		t.Fatalf("EncryptForTest: %v", err)
+	}
+	encB64 := base64.StdEncoding.EncodeToString(sealed)
+
+	var captured proxmox.CreateLXCSpec
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			captured = spec
+			return "UPID:lxcnew", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+	d.PrivateKey = priv
+
+	cmd := newLXCCreateCmdEncrypted(32, "n1", 202, "beta-ct", "local:vztmpl/debian.tar.zst", encB64, 2, 1024, "local-lvm", 16, "vmbr0", false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.Password != plainPassword {
+		t.Errorf("decrypted password = %q, want %q", captured.Password, plainPassword)
+	}
+}
+
+// Failure path: iOS sends encrypted but the agent has no private
+// key (e.g. agent not --register-ed after #1476). The command must
+// be completed as failed.
+func TestHandle_LXCCreate_Encrypted_NoPrivateKey_Fails(t *testing.T) {
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			t.Fatalf("createLXC mag niet aangeroepen worden zonder private key")
+			return "", nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+	// d.PrivateKey blijft nil
+
+	cmd := newLXCCreateCmdEncrypted(33, "n1", 203, "ct", "local:vztmpl/debian.tar.zst", "AAAA", 1, 512, "local-lvm", 8, "vmbr0", true)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("Handle should not return an error (it should complete with failed): %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[33].status != "failed" {
+		t.Errorf("status=%q want failed", store.completed[33].status)
+	}
+}
+
+// Failure path: neither password_enc nor password is set.
+func TestHandle_LXCCreate_NoPassword_Fails(t *testing.T) {
+	actor := &fakeActor{
+		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
+			t.Fatalf("createLXC mag niet aangeroepen worden zonder password")
+			return "", nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind": "lxc", "node": "n1", "vmid": 204,
+		"hostname": "ct", "ostemplate": "local:vztmpl/debian.tar.zst",
+		"cores": 1, "memory_mb": 512, "disk_storage": "local-lvm",
+		"disk_size_gb": 8, "network_bridge": "vmbr0", "unprivileged": true,
+	})
+	cmd := supabase.Command{
+		ID: 34, HostID: "h", Kind: string(proxmox.ActionLXCCreate),
+		Payload: payload, Status: "pending", ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[34].status != "failed" {
+		t.Errorf("status=%q want failed", store.completed[34].status)
+	}
+}
+
+func newGuestDeleteCmd(id int64, guestKind, node string, vmid int, destroyDisks, purgeBackups bool) supabase.Command {
+	payload, _ := json.Marshal(map[string]any{
+		"guest_kind":     guestKind,
+		"node":           node,
+		"vmid":           vmid,
+		"destroy_disks":  destroyDisks,
+		"purge_backups":  purgeBackups,
+	})
+	return supabase.Command{
+		ID:        id,
+		HostID:    "host-abc",
+		Kind:      string(proxmox.ActionGuestDelete),
+		Payload:   payload,
+		Status:    "pending",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+	}
+}
+
+func TestHandle_GuestDelete_HappyPath_FlagsPropagated(t *testing.T) {
+	var captured struct {
+		kind                       proxmox.GuestKind
+		node                       string
+		vmid                       int
+		destroyDisks, purgeBackups bool
+	}
+	actor := &fakeActor{
+		deleteGuest: func(ctx context.Context, kind proxmox.GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
+			captured.kind = kind
+			captured.node = node
+			captured.vmid = vmid
+			captured.destroyDisks = destroyDisks
+			captured.purgeBackups = purgeBackups
+			return "UPID:del", nil
+		},
+		await: func(ctx context.Context, node, upid string, timeout time.Duration) (proxmox.TaskStatus, error) {
+			return proxmox.TaskStatus{UPID: upid, Done: true, ExitStatus: "OK"}, nil
+		},
+	}
+	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
+	d := New(actor, store)
+
+	cmd := newGuestDeleteCmd(40, "lxc", "n1", 300, true, false)
+	if err := d.Handle(context.Background(), cmd); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if captured.kind != proxmox.GuestKindLXC || captured.node != "n1" || captured.vmid != 300 ||
+		!captured.destroyDisks || captured.purgeBackups {
+		t.Errorf("unexpected: %+v", captured)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.completed[40].status != "done" {
+		t.Errorf("status=%q", store.completed[40].status)
 	}
 }
 

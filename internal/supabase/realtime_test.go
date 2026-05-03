@@ -13,7 +13,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-// mockRealtimeServer is een minimale Phoenix-WS server voor tests.
+// mockRealtimeServer is a minimal Phoenix-WS server for tests.
 type mockRealtimeServer struct {
 	srv             *httptest.Server
 	mu              sync.Mutex
@@ -120,7 +120,7 @@ func TestSubscribeCommands_JoinsCorrectChannel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SubscribeCommands(ctx, "host-abc-123")
+	_, err := c.SubscribeCommands(ctx, "cluster-abc-123")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -135,8 +135,8 @@ func TestSubscribeCommands_JoinsCorrectChannel(t *testing.T) {
 	topic := m.joinedTopic
 	payload := m.joinedPayload
 	m.mu.Unlock()
-	if !strings.Contains(topic, "commands") || !strings.Contains(topic, "host-abc-123") {
-		t.Errorf("topic=%q (want contains commands + host_id)", topic)
+	if !strings.Contains(topic, "commands") || !strings.Contains(topic, "cluster-abc-123") {
+		t.Errorf("topic=%q (want contains commands + cluster_id)", topic)
 	}
 	// Verify presence is requested
 	cfg, _ := payload["config"].(map[string]any)
@@ -150,7 +150,7 @@ func TestSubscribeCommands_JoinsCorrectChannel(t *testing.T) {
 		t.Fatalf("postgres_changes=%v", pc)
 	}
 	first, _ := pc[0].(map[string]any)
-	if filter, _ := first["filter"].(string); !strings.Contains(filter, "host-abc-123") {
+	if filter, _ := first["filter"].(string); !strings.Contains(filter, "cluster-abc-123") {
 		t.Errorf("filter=%q", filter)
 	}
 }
@@ -164,7 +164,7 @@ func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SubscribeCommands(ctx, "host-abc-123")
+	_, err := c.SubscribeCommands(ctx, "cluster-abc-123")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -175,8 +175,8 @@ func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
 		t.Fatal("join never arrived")
 	}
 
-	// Track-frame komt direct na phx_reply ok. Geef de write-loop heel kort
-	// de tijd om bij de mock te landen.
+	// The track frame arrives right after phx_reply ok. Give the
+	// write-loop a brief moment to reach the mock.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		m.mu.Lock()
@@ -201,8 +201,8 @@ func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
 		t.Errorf("payload.event=%q want %q", ev, "track")
 	}
 	state, _ := payload["payload"].(map[string]any)
-	if hostID, _ := state["host_id"].(string); hostID != "host-abc-123" {
-		t.Errorf("state.host_id=%q want %q", hostID, "host-abc-123")
+	if clusterID, _ := state["cluster_id"].(string); clusterID != "cluster-abc-123" {
+		t.Errorf("state.cluster_id=%q want %q", clusterID, "cluster-abc-123")
 	}
 	if onlineAt, _ := state["online_at"].(string); onlineAt == "" {
 		t.Errorf("state.online_at empty: %+v", state)
@@ -219,7 +219,7 @@ func TestSubscribeCommands_JoinRejectedLoopsAndRetries(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	ch, err := c.SubscribeCommands(ctx, "host-abc-123")
+	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123")
 	if err != nil {
 		t.Fatalf("subscribe returned err: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSubscribeCommands_ForwardsInsert(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	ch, err := c.SubscribeCommands(ctx, "host-abc-123")
+	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,9 +259,9 @@ func TestSubscribeCommands_ForwardsInsert(t *testing.T) {
 		t.Fatal("join never arrived")
 	}
 
-	m.pushInsert(t, "realtime:commands:host-abc-123", map[string]any{
+	m.pushInsert(t, "realtime:commands:cluster-abc-123", map[string]any{
 		"id":         float64(7),
-		"host_id":    "host-abc-123",
+		"host_id":    "node-1-host-uuid",
 		"kind":       "start",
 		"payload":    map[string]any{"guest_kind": "qemu", "node": "n1", "vmid": 112},
 		"status":     "pending",

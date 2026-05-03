@@ -111,8 +111,17 @@ Group=root
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/proxmoxvue-agent
+# /var/log is explicitly ReadWrite so lumberjack can write the active log
+# file plus its rotated backups (.1, .2, .gz) in /var/log/. Required because
+# ProtectSystem=strict would otherwise make /var/log read-only.
+ReadWritePaths=/etc/proxmoxvue-agent /var/log
 PrivateTmp=true
+# Single source of truth: the agent writes directly to
+# /var/log/proxmoxvue-agent.log via lumberjack. Stdout has nothing left,
+# null prevents journald from accumulating empty lines. Stderr stays on
+# journal so panics and pre-slog fatals are still captured.
+StandardOutput=null
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -81,10 +82,10 @@ func (c *Client) ClusterResources(ctx context.Context) (json.RawMessage, error) 
 	return wrapper.Data, nil
 }
 
-// GetRaw doet een generieke GET op een willekeurig Proxmox-pad en geeft de
-// volledige response-body terug. Gebruikt door de read-RPC dispatcher; alle
-// path-validatie gebeurt daar (whitelist), niet hier — deze functie is een
-// dumme passthrough.
+// GetRaw performs a generic GET against any Proxmox path and returns
+// the full response body. Used by the read-RPC dispatcher; all path
+// validation happens there (whitelist), not here — this function is a
+// dumb passthrough.
 func (c *Client) GetRaw(ctx context.Context, path string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIURL+path, nil)
 	if err != nil {
@@ -132,6 +133,71 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("parse response: %w", err)
+	}
+	return nil
+}
+
+// deleteJSON DELETEs a resource. Used by snapshot.delete — Proxmox
+// returns a UPID envelope just like the POST endpoints.
+func (c *Client) deleteJSON(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.cfg.APIURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("parse response: %w", err)
+		}
+	}
+	return nil
+}
+
+// postForm POSTs a url.Values as an application/x-www-form-urlencoded
+// body — the format Proxmox write endpoints (snapshot, vm-create,
+// etc.) require.
+func (c *Client) postForm(ctx context.Context, path string, form url.Values, out any) error {
+	body := strings.NewReader(form.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.APIURL+path, body)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", c.authHeader)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d: %s", resp.StatusCode, truncate(string(raw), 200))
+	}
+	if out != nil {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return fmt.Errorf("parse response: %w", err)
+		}
 	}
 	return nil
 }

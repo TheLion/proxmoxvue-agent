@@ -35,7 +35,7 @@ type Client struct {
 	persist     PersistRefreshFunc
 	authBase    string
 	restBase    string
-	realtimeURL string // override voor tests; leeg = wss://<ref>.supabase.co/realtime/v1/websocket
+	realtimeURL string // override for tests; empty = wss://<ref>.supabase.co/realtime/v1/websocket
 
 	mu           sync.Mutex
 	accessToken  string
