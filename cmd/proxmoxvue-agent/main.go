@@ -27,11 +27,11 @@ const (
 	defaultConfigPath = "/etc/proxmoxvue-agent/config.yml"
 )
 
-// version wordt geinjecteerd via ldflags bij release-builds:
+// version is injected via ldflags in release builds:
 //
 //	go build -ldflags="-X main.version=$(git describe --tags --always --dirty)" ...
 //
-// Default "dev" voor `go run` en niet-build-script-builds.
+// Defaults to "dev" for `go run` and non-build-script builds.
 var version = "dev"
 
 // exitRevoked signals systemd that this failure is permanent for the
@@ -81,11 +81,11 @@ func runAgent(args []string) {
 		os.Exit(2)
 	}
 
-	// Init slog handler op basis van agent.log_level + log_file_path. Config
-	// kan ontbreken of corrupt zijn — die fout komt straks uit runtime.Start;
-	// voor logging vallen we hier terug op INFO + default file-path. Een
-	// wel-aanwezige maar ongeldige log_level / negatieve logging-waarde is
-	// fail-fast (anders verbergen we user-fouten).
+	// Init the slog handler based on agent.log_level + log_file_path.
+	// The config may be missing or corrupt — that error surfaces from
+	// runtime.Start; for logging we fall back here to INFO + default
+	// file path. A present-but-invalid log_level / negative logging
+	// value is fail-fast (otherwise we'd hide user errors).
 	level := slog.LevelInfo
 	rotation := config.AgentConfig{}.EffectiveLogRotation()
 	if cfg, err := config.Load(*configPath); err == nil {
@@ -99,15 +99,15 @@ func runAgent(args []string) {
 			os.Exit(1)
 		}
 		level = l
-		// Vul ontbrekende defaults in en herschrijf config.yml elke start
-		// zodat alle keys + inline comments zichtbaar blijven, ook na een
-		// upgrade die nieuwe velden / comments introduceert. Idempotent
-		// als er niets verandert (zelfde bytes, alleen mtime). Bij
-		// write-fout (bv. read-only fs): warn maar doorgaan — agent
-		// draait verder met in-memory defaults.
+		// Fill missing defaults and rewrite config.yml on every start so
+		// all keys + inline comments stay visible, even after an
+		// upgrade that introduces new fields/comments. Idempotent when
+		// nothing changes (same bytes, only mtime). On write failure
+		// (e.g. read-only fs): warn but continue — the agent keeps
+		// running with in-memory defaults.
 		config.EnsureDefaults(&cfg)
 		if saveErr := config.Save(*configPath, cfg); saveErr != nil {
-			fmt.Fprintf(os.Stderr, "warn: kon config niet herschrijven: %v\n", saveErr)
+			fmt.Fprintf(os.Stderr, "warn: failed to rewrite config: %v\n", saveErr)
 		}
 		rotation = cfg.Agent.EffectiveLogRotation()
 	}
@@ -128,10 +128,11 @@ func runAgent(args []string) {
 	}
 }
 
-// newLogSink bouwt een lumberjack writer op de gegeven rotation-config. Bij
-// een onschrijfbare LogFilePath (typisch tijdens lokaal `go run` zonder
-// /var/log toegang) valt het terug op stderr — de agent crasht dan niet op
-// een logging-pad, alleen runtime.Start kan z'n echte fouten nog rapporteren.
+// newLogSink builds a lumberjack writer from the given rotation
+// config. If LogFilePath is not writable (typical during local
+// `go run` without /var/log access) it falls back to stderr — that
+// way the agent doesn't crash on a logging path; runtime.Start can
+// still report its real errors.
 func newLogSink(r config.LogRotation) io.Writer {
 	probe, err := os.OpenFile(r.FilePath, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -170,17 +171,16 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	// Non-destructive merge: laad bestaande config (proxmox + agent
-	// blijven zoals ze waren), validate huidige log_level, vervang
-	// alleen het Supabase-block. Bij parse-fout op een bestaande
-	// config: fail-fast — anders verlies je gebruiker-data door
-	// een typo te overschrijven.
+	// Non-destructive merge: load the existing config (proxmox + agent
+	// stay as they were), validate the current log_level, replace only
+	// the Supabase block. On parse error against an existing config:
+	// fail-fast — otherwise we'd silently overwrite user data on a typo.
 	var cfg config.File
 	if existing, loadErr := config.Load(*configPath); loadErr == nil {
 		cfg = existing
 		if cfg.Agent.LogLevel != "" {
 			if _, vErr := config.ParseLogLevel(cfg.Agent.LogLevel); vErr != nil {
-				fmt.Fprintf(os.Stderr, "config bevat ongeldige %v\n", vErr)
+				fmt.Fprintf(os.Stderr, "config has invalid %v\n", vErr)
 				os.Exit(1)
 			}
 		}
@@ -189,9 +189,9 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	// Hergebruik bestaande PrivateKey als die er al is — re-register mag
-	// de keypair niet rouleren, anders kunnen al-versleutelde payloads
-	// niet meer ontcijferd worden. Genereer alleen wanneer afwezig.
+	// Reuse the existing PrivateKey if present — re-register must not
+	// rotate the keypair, otherwise already-encrypted payloads can no
+	// longer be decrypted. Only generate when absent.
 	privateKeyB64 := cfg.Supabase.PrivateKey
 	if privateKeyB64 == "" {
 		privBytes, _, err := agentcrypto.GenerateKeypair()
@@ -215,14 +215,14 @@ func runRegister(args []string) {
 		os.Exit(1)
 	}
 
-	// Public key uploaden naar clusters.public_key zodat iOS de
-	// LXC-passwords E2E-encrypted kan versturen (#1476). Failure hier is
-	// geen fatal — de iOS-app toont dan "agent-update nodig" bij LXC-create
-	// en de gebruiker kan handmatig --register opnieuw draaien.
+	// Upload the public key to clusters.public_key so iOS can send
+	// LXC passwords E2E-encrypted (#1476). Failure here is not fatal —
+	// the iOS app then shows "agent update needed" on LXC create and
+	// the user can manually re-run --register.
 	if err := uploadPublicKey(cfg, privateKeyB64); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: kon public key niet uploaden: %v\n", err)
-		fmt.Fprintln(os.Stderr, "      LXC-creates via cloud-pad zullen falen tot dit lukt;")
-		fmt.Fprintln(os.Stderr, "      voer --register opnieuw uit zodra Supabase weer bereikbaar is.")
+		fmt.Fprintf(os.Stderr, "warn: failed to upload public key: %v\n", err)
+		fmt.Fprintln(os.Stderr, "      cloud-path LXC creates will fail until this succeeds;")
+		fmt.Fprintln(os.Stderr, "      run --register again once Supabase is reachable.")
 	}
 
 	fmt.Printf("registered cluster %s (host %s), config written to %s\n", result.ClusterID, result.HostID, *configPath)
@@ -238,13 +238,13 @@ func runRegister(args []string) {
 	} else {
 		fmt.Println("Proxmox-config staat al klaar — herstart de agent:")
 		fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
-		fmt.Println("  of: proxmoxvue-agent --run  (foreground)")
+		fmt.Println("  or: proxmoxvue-agent --run  (foreground)")
 	}
 }
 
-// uploadPublicKey leidt de public key af van de gepersisteerde private key
-// en schrijft 'm naar clusters.public_key. Idempotent — re-runnen na
-// netwerkfailure mag.
+// uploadPublicKey derives the public key from the persisted private
+// key and writes it to clusters.public_key. Idempotent — safe to
+// re-run after a network failure.
 func uploadPublicKey(cfg config.File, privateKeyB64 string) error {
 	privBytes, err := base64.StdEncoding.DecodeString(privateKeyB64)
 	if err != nil {

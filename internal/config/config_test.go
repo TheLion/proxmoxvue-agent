@@ -115,7 +115,7 @@ func TestEnsureDefaults(t *testing.T) {
 		t.Errorf("defaults not applied: %+v", cfg.Agent)
 	}
 
-	// Tweede call op already-filled config moet idempotent zijn.
+	// A second call against an already-filled config must be idempotent.
 	if EnsureDefaults(&cfg) {
 		t.Error("expected changed=false on fully populated config")
 	}

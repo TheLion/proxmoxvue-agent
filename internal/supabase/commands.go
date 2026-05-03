@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// Command is één rij uit public.commands zoals de agent die nodig heeft.
-// HostID is informatief (welke node-context iOS bedoelde); cluster_id is
-// de claim-key en zit niet in deze struct want de agent kent z'n cluster
-// al via config.
+// Command is one row from public.commands as the agent needs it.
+// HostID is informational (which node context iOS meant); cluster_id
+// is the claim key and isn't in this struct because the agent already
+// knows its cluster via config.
 type Command struct {
 	ID        int64           `json:"id"`
 	HostID    string          `json:"host_id,omitempty"`
@@ -23,9 +23,10 @@ type Command struct {
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
-// ClaimCommand probeert de rij met id en status=pending atomair naar
-// status=claimed te zetten. Retourneert true als de update een rij raakte
-// (wij zijn de claimant), false als de rij al geclaimed/afgerond is.
+// ClaimCommand atomically tries to flip the row with id and
+// status=pending to status=claimed. Returns true if the update
+// touched a row (we are the claimant), false if the row was already
+// claimed/finished.
 func (c *Client) ClaimCommand(ctx context.Context, id int64) (bool, error) {
 	body := map[string]any{
 		"status":     "claimed",
@@ -43,8 +44,8 @@ func (c *Client) ClaimCommand(ctx context.Context, id int64) (bool, error) {
 	return len(returned) > 0, nil
 }
 
-// CompleteCommand zet status + result + completed_at in één PATCH.
-// status moet "done", "failed" of "expired" zijn.
+// CompleteCommand sets status + result + completed_at in a single PATCH.
+// status must be "done", "failed" or "expired".
 func (c *Client) CompleteCommand(ctx context.Context, id int64, status string, result map[string]any) error {
 	body := map[string]any{
 		"status":       status,
@@ -59,9 +60,9 @@ func (c *Client) CompleteCommand(ctx context.Context, id int64, status string, r
 	return c.patchRow(ctx, path, raw)
 }
 
-// patchRowReturning PATCH't met Prefer: return=representation en decodeert
-// de respons als een slice van JSON objecten. Bij 401 wordt één keer de
-// token gerefreshed en opnieuw geprobeerd.
+// patchRowReturning PATCHes with Prefer: return=representation and
+// decodes the response as a slice of JSON objects. On 401 the token
+// is refreshed once and the request retried.
 func (c *Client) patchRowReturning(ctx context.Context, path string, body []byte) ([]json.RawMessage, error) {
 	status, raw, err := c.patchWithAuth(ctx, path, body, "return=representation")
 	if err != nil {
@@ -77,7 +78,7 @@ func (c *Client) patchRowReturning(ctx context.Context, path string, body []byte
 	return rows, nil
 }
 
-// patchRow PATCH't met Prefer: return=minimal — geen response-body nodig.
+// patchRow PATCHes with Prefer: return=minimal — no response body needed.
 func (c *Client) patchRow(ctx context.Context, path string, body []byte) error {
 	status, raw, err := c.patchWithAuth(ctx, path, body, "return=minimal")
 	if err != nil {
@@ -89,7 +90,7 @@ func (c *Client) patchRow(ctx context.Context, path string, body []byte) error {
 	return nil
 }
 
-// patchWithAuth voert een PATCH uit met automatische token-refresh-on-401.
+// patchWithAuth performs a PATCH with automatic token-refresh-on-401.
 func (c *Client) patchWithAuth(ctx context.Context, path string, body []byte, preferHeader string) (int, []byte, error) {
 	attempt := func(token string) (int, []byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.restBase+path, bytes.NewReader(body))

@@ -6,14 +6,14 @@ import (
 	"fmt"
 )
 
-// UploadClusterPublicKey schrijft de HPKE public key naar
-// `clusters.public_key` voor de eigen cluster_id. Idempotent: bij gelijke
-// content gewoon overschrijven, geen check-and-skip nodig (Postgres
-// vergelijking op bytea is goedkoop). RLS-policy "clusters: agent update"
-// staat dit toe vanuit de agent-rol.
+// UploadClusterPublicKey writes the HPKE public key to
+// `clusters.public_key` for the agent's own cluster_id. Idempotent:
+// just overwrite on identical content, no check-and-skip needed
+// (Postgres bytea comparison is cheap). RLS policy "clusters: agent
+// update" allows this from the agent role.
 //
-// Postgres' bytea-kolom verwacht in JSON via PostgREST een hex-encoded
-// string met `\x`-prefix; PostgREST decodet die automatisch.
+// Postgres' bytea column expects a hex-encoded string with `\x` prefix
+// in JSON via PostgREST; PostgREST decodes that automatically.
 func (c *Client) UploadClusterPublicKey(ctx context.Context, clusterID string, publicKey []byte) error {
 	body, err := json.Marshal(map[string]any{"public_key": bytesToBytea(publicKey)})
 	if err != nil {
@@ -25,8 +25,8 @@ func (c *Client) UploadClusterPublicKey(ctx context.Context, clusterID string, p
 	return nil
 }
 
-// bytesToBytea encodeert raw bytes naar het PostgREST-bytea-formaat
-// `\xDEADBEEF...` zodat de waarde in een bytea-kolom landt.
+// bytesToBytea encodes raw bytes to PostgREST's bytea format
+// `\xDEADBEEF...` so the value lands in a bytea column.
 func bytesToBytea(b []byte) string {
 	const hexdigits = "0123456789abcdef"
 	out := make([]byte, 2+len(b)*2)

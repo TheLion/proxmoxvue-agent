@@ -25,8 +25,9 @@ const defaultPollInterval = 30 * time.Second
 // Supabase session was revoked — caller should exit with a distinct
 // code so systemd's restart policy doesn't hammer a dead session.
 //
-// `version` wordt gelogd bij startup zodat een journalctl-grep meteen
-// laat zien welke build draait (geinjecteerd via ldflags in release-builds).
+// `version` is logged at startup so a journalctl grep immediately
+// reveals which build is running (injected via ldflags in release
+// builds).
 func Start(ctx context.Context, configPath, version string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -60,7 +61,7 @@ func Start(ctx context.Context, configPath, version string) error {
 		interval = time.Duration(cfg.Agent.PollIntervalSeconds) * time.Second
 	}
 
-	// === Command pipeline (naast de status-push-ticker). ===
+	// === Command pipeline (alongside the status-push ticker). ===
 	dispatcher := commands.New(pve, sb)
 	if cfg.Supabase.PrivateKey != "" {
 		privBytes, decodeErr := base64.StdEncoding.DecodeString(cfg.Supabase.PrivateKey)
@@ -69,7 +70,7 @@ func Start(ctx context.Context, configPath, version string) error {
 		}
 		dispatcher.PrivateKey = privBytes
 	} else {
-		slog.Warn("no private_key in config — LXC create-passwords kunnen niet ontcijferd worden (re-run --register)")
+		slog.Warn("no private_key in config — LXC create-passwords cannot be decrypted (re-run --register)")
 	}
 	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID)
 	if err != nil {
@@ -93,8 +94,8 @@ func Start(ctx context.Context, configPath, version string) error {
 		}
 	}()
 
-	// First push happens immediately so de cluster meteen na boot een
-	// snapshot heeft, zonder een volle tick te wachten.
+	// First push happens immediately so the cluster has a snapshot
+	// right after boot without waiting a full tick.
 	pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID)
 
 	ticker := time.NewTicker(interval)
@@ -120,20 +121,21 @@ func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Cli
 		slog.Error("command handle failed", "id", cmd.ID, "err", err)
 		return
 	}
-	// /cluster/resources is eventually consistent — empirisch 1-7s achter op
-	// task-completion. Direct pushen na CompleteCommand bevat dus typisch nog
-	// de oude state. Wacht actief tot Proxmox' aggregate-cache de nieuwe state
-	// reflecteert, dan pushen. Bij timeout pushen we sowieso (UX-degradatie
-	// naar de routine 30s-tick, geen correctness-issue).
+	// /cluster/resources is eventually consistent — empirically 1–7s
+	// behind task completion. A direct push after CompleteCommand
+	// therefore typically still carries the old state. Actively wait
+	// until Proxmox' aggregate cache reflects the new state, then push.
+	// On timeout we push anyway (UX degradation to the routine 30s
+	// tick, no correctness issue).
 	waitForClusterStateMatch(ctx, pve, cmd)
 	if err := pushOnce(ctx, pve, sb, clusterID); err != nil {
 		slog.Warn("post-action snapshot push failed", "id", cmd.ID, "err", err)
 	}
 }
 
-// waitForClusterStateMatch polt /cluster/resources tot de target guest in de
-// verwachte status staat, of tot de per-kind timeout verstrijkt. No-op voor
-// commands met onbekende kind of onparseerbaar payload.
+// waitForClusterStateMatch polls /cluster/resources until the target
+// guest is in the expected status or the per-kind timeout elapses.
+// No-op for commands with an unknown kind or an unparseable payload.
 func waitForClusterStateMatch(ctx context.Context, pve *proxmox.Client, cmd supabase.Command) {
 	expected, timeout, ok := commands.ExpectedStateFor(cmd.Kind)
 	if !ok {
@@ -160,10 +162,10 @@ func waitForClusterStateMatch(ctx context.Context, pve *proxmox.Client, cmd supa
 	slog.Info("post-action state-match timeout — pushing current state", "id", cmd.ID, "vmid", ref.VMID, "expected", expected)
 }
 
-// hasGuestState parseert de raw /cluster/resources payload en kijkt of de
-// guest met `vmid` op `expected`-status staat. Het payload-array bevat
-// nodes/qemu/lxc/storage/network entries met variable velden — een minimale
-// `[{vmid, status}]` decode is genoeg.
+// hasGuestState parses the raw /cluster/resources payload and checks
+// whether the guest with `vmid` is in the `expected` status. The
+// payload array contains nodes/qemu/lxc/storage/network entries with
+// variable fields — a minimal `[{vmid, status}]` decode is enough.
 func hasGuestState(resources json.RawMessage, vmid int, expected string) bool {
 	var entries []struct {
 		VMID   int    `json:"vmid"`
@@ -196,8 +198,9 @@ func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clu
 		slog.Error("push snapshot failed", "err", err)
 		return err
 	}
-	// DEBUG: routine 30s-pushes vullen anders het log onder de read_command-
-	// regels die je tijdens debuggen wel wil zien. Push failures blijven ERROR.
+	// DEBUG: routine 30s pushes would otherwise drown out the
+	// read_command lines you actually want to see while debugging.
+	// Push failures stay at ERROR.
 	slog.Debug("snapshot pushed", "bytes", len(resources))
 	return nil
 }

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// fakeTokenClient geeft een Client die niet refresht — handig voor tests die
-// alleen het REST-pad willen verifiëren.
+// fakeTokenClient returns a Client that does not refresh — handy for
+// tests that only want to verify the REST path.
 func fakeTokenClient(t *testing.T, restBase string) *Client {
 	t.Helper()
 	return &Client{

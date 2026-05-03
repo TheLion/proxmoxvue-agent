@@ -24,12 +24,12 @@ type SupabaseConfig struct {
 	ProjectRef   string `yaml:"project_ref"`
 	ClusterID    string `yaml:"cluster_id"`
 	RefreshToken string `yaml:"refresh_token"`
-	// PrivateKey is een base64-encoded raw X25519 private key (32 bytes)
-	// voor HPKE-decryptie van LXC create-passwords (#1476). Wordt
-	// gegenereerd bij --register als hij ontbreekt; de bijbehorende
-	// public key gaat naar clusters.public_key in Supabase. Lekkage
-	// van deze key compromitteert lopend-versleutelde passwords; mode
-	// 0600 op config.yml beschermt 'm. Re-keying = nieuwe --register.
+	// PrivateKey is a base64-encoded raw X25519 private key (32 bytes)
+	// used for HPKE decryption of LXC create-passwords (#1476). It is
+	// generated at --register time when missing; the matching public
+	// key is uploaded to clusters.public_key in Supabase. Leaking this
+	// key compromises currently-encrypted passwords; mode 0600 on
+	// config.yml protects it. Re-keying means a fresh --register.
 	PrivateKey string `yaml:"private_key,omitempty"`
 }
 
@@ -66,19 +66,20 @@ type AgentConfig struct {
 	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
 	LogLevel            string `yaml:"log_level"`
 
-	// File-logging via lumberjack. Lege LogFilePath valt terug op de default
-	// `/var/log/proxmoxvue-agent.log`; de andere lege/0-waarden vallen terug
-	// op de defaults uit DefaultLogRotation. Gebruiker kan elk veld los
-	// overrullen via config.yml. EnsureDefaults persisteert deze waarden bij
-	// elke agent-start zodat de keys altijd zichtbaar in config.yml staan.
+	// File logging via lumberjack. An empty LogFilePath falls back to
+	// the default `/var/log/proxmoxvue-agent.log`; other empty/0 values
+	// fall back to the defaults from DefaultLogRotation. Users can
+	// override each field individually via config.yml. EnsureDefaults
+	// persists these values on every agent start so the keys are always
+	// visible in config.yml.
 	LogFilePath   string `yaml:"log_file_path"`
 	LogMaxSizeMB  int    `yaml:"log_max_size_mb"`
 	LogMaxBackups int    `yaml:"log_max_backups"`
 	LogMaxAgeDays int    `yaml:"log_max_age_days"`
 }
 
-// LogRotation bundelt de effectieve logging-instellingen na default-fill,
-// zodat caller-code ze als één geheel doorgeeft aan lumberjack.
+// LogRotation bundles the effective logging settings after default-fill
+// so caller code can pass them through to lumberjack as a single value.
 type LogRotation struct {
 	FilePath   string
 	MaxSizeMB  int
@@ -86,11 +87,11 @@ type LogRotation struct {
 	MaxAgeDays int
 }
 
-// DefaultLogFilePath is de default log-locatie als config.yml geen pad geeft.
+// DefaultLogFilePath is the default log location when config.yml gives no path.
 const DefaultLogFilePath = "/var/log/proxmoxvue-agent.log"
 
-// Defaults voor de overige agent-velden, zo gecentraliseerd dat
-// EnsureDefaults en EffectiveLogRotation hetzelfde getal pakken.
+// Defaults for the remaining agent fields, centralised so that
+// EnsureDefaults and EffectiveLogRotation pick up the same numbers.
 const (
 	DefaultPollIntervalSeconds = 30
 	DefaultLogLevel            = "info"
@@ -99,9 +100,10 @@ const (
 	DefaultLogMaxAgeDays       = 30
 )
 
-// EffectiveLogRotation returnt de log-instellingen na default-fill. Defaults:
-// 10 MB per file, 5 backups bewaard, max 30 dagen oud. Voldoet voor een
-// homelab-deploy met routine 30s-pushes (~50-100 KB/dag aan logs).
+// EffectiveLogRotation returns the log settings after default-fill.
+// Defaults: 10 MB per file, 5 backups retained, max 30 days old. That
+// suits a homelab deploy with routine 30s pushes (~50–100 KB/day of
+// logs).
 func (c AgentConfig) EffectiveLogRotation() LogRotation {
 	r := LogRotation{
 		FilePath:   c.LogFilePath,
@@ -124,10 +126,10 @@ func (c AgentConfig) EffectiveLogRotation() LogRotation {
 	return r
 }
 
-// ValidateLogging blokkeert ongeldige config-waarden bij start. Negatieve
-// getallen zijn fout (lumberjack accepteert ze maar het is gegarandeerd
-// niet wat de gebruiker bedoelde). Zero-values vallen terug op defaults
-// via EffectiveLogRotation; geen error.
+// ValidateLogging rejects invalid config values at startup. Negative
+// numbers are wrong (lumberjack accepts them but it's guaranteed not
+// what the user meant). Zero values fall back to defaults via
+// EffectiveLogRotation; no error.
 func (c AgentConfig) ValidateLogging() error {
 	if c.LogMaxSizeMB < 0 {
 		return fmt.Errorf("log_max_size_mb must be >= 0, got %d", c.LogMaxSizeMB)
@@ -141,17 +143,17 @@ func (c AgentConfig) ValidateLogging() error {
 	return nil
 }
 
-// EnsureDefaults vult ontbrekende agent-velden in de config met hun
-// defaults. Returnt true als er iets is gewijzigd zodat de caller weet
-// of een Save nodig is. Het idee: na de eerste agent-start staan álle
-// keys expliciet in config.yml, zodat een gebruiker ze kan vinden +
-// aanpassen zonder docs te lezen.
+// EnsureDefaults fills missing agent fields in the config with their
+// defaults. Returns true if anything changed so the caller knows a
+// Save is needed. The idea: after the first agent start every key is
+// explicitly present in config.yml so a user can find and edit them
+// without reading the docs.
 //
-// Note: 0 / "" worden hier als 'unset' behandeld, gelijk aan
-// EffectiveLogRotation. Een gebruiker die expliciet 0 wil persisten kan dat
-// niet — dat is geen zinvolle waarde voor deze velden (size 0 = onmiddellijk
-// roteren, age 0 = nooit verwijderen op leeftijd, poll 0 = drukke loop;
-// conflicteert met defaults).
+// Note: 0 / "" are treated as 'unset' here, identical to
+// EffectiveLogRotation. A user who deliberately wants to persist 0
+// cannot — that's not a meaningful value for these fields (size 0 =
+// rotate immediately, age 0 = never delete on age, poll 0 = busy
+// loop; conflicts with the defaults).
 func EnsureDefaults(cfg *File) bool {
 	changed := false
 	if cfg.Agent.PollIntervalSeconds == 0 {
@@ -181,9 +183,9 @@ func EnsureDefaults(cfg *File) bool {
 	return changed
 }
 
-// ParseLogLevel mapt config-strings (case-insensitive) naar slog.Level.
-// Lege string defaultt naar info. Onbekende waarde levert een error op
-// zodat de caller fail-fast kan exit'en.
+// ParseLogLevel maps config strings (case-insensitive) to slog.Level.
+// An empty string defaults to info. An unknown value returns an error
+// so the caller can fail-fast and exit.
 func ParseLogLevel(s string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "info":

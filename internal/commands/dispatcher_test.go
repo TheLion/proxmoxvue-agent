@@ -312,7 +312,7 @@ func TestHandle_SnapshotCreate_InvalidName_Fails(t *testing.T) {
 	store := &fakeStore{claimRet: func(int64) (bool, error) { return true, nil }}
 	d := New(actor, store)
 
-	// Beginnen met cijfer is volgens Proxmox-regels niet geldig.
+	// Starting with a digit is invalid per Proxmox rules.
 	cmd := newSnapshotCreateCmd(12, "qemu", "n1", 112, "1bad", "", false)
 	if err := d.Handle(context.Background(), cmd); err != nil {
 		t.Fatal(err)
@@ -571,8 +571,9 @@ func TestHandle_LXCCreate_HappyPath_PasswordPropagated(t *testing.T) {
 	}
 }
 
-// Encrypted-pad: iOS sealt het wachtwoord met de cluster-public-key, agent
-// decrypteert met de private key — plaintext belandt nooit in commands.payload.
+// Encrypted path: iOS seals the password with the cluster public
+// key, the agent decrypts with the private key — plaintext never
+// lands in commands.payload.
 func TestHandle_LXCCreate_Encrypted_PasswordDecryptedAndPropagated(t *testing.T) {
 	priv, pub, err := agentcrypto.GenerateKeypair()
 	if err != nil {
@@ -608,8 +609,9 @@ func TestHandle_LXCCreate_Encrypted_PasswordDecryptedAndPropagated(t *testing.T)
 	}
 }
 
-// Foutpad: iOS stuurt encrypted maar de agent heeft geen private key (bv.
-// agent niet --register-d na #1476). Command moet failed worden afgesloten.
+// Failure path: iOS sends encrypted but the agent has no private
+// key (e.g. agent not --register-ed after #1476). The command must
+// be completed as failed.
 func TestHandle_LXCCreate_Encrypted_NoPrivateKey_Fails(t *testing.T) {
 	actor := &fakeActor{
 		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {
@@ -632,7 +634,7 @@ func TestHandle_LXCCreate_Encrypted_NoPrivateKey_Fails(t *testing.T) {
 	}
 }
 
-// Foutpad: zowel password_enc als password ontbreken.
+// Failure path: neither password_enc nor password is set.
 func TestHandle_LXCCreate_NoPassword_Fails(t *testing.T) {
 	actor := &fakeActor{
 		createLXC: func(ctx context.Context, spec proxmox.CreateLXCSpec) (string, error) {

@@ -11,7 +11,7 @@ import (
 
 // PushSnapshot inserts a single row into public.status_snapshots.
 // The payload is stored as-is in the jsonb column; captured_at defaults
-// server-side. RLS checks dat cluster_id in JWT.cluster_ids zit.
+// server-side. RLS checks that cluster_id is in JWT.cluster_ids.
 func (c *Client) PushSnapshot(ctx context.Context, clusterID string, payload json.RawMessage) error {
 	body, err := json.Marshal(map[string]any{
 		"cluster_id": clusterID,

@@ -13,7 +13,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-// mockRealtimeServer is een minimale Phoenix-WS server voor tests.
+// mockRealtimeServer is a minimal Phoenix-WS server for tests.
 type mockRealtimeServer struct {
 	srv             *httptest.Server
 	mu              sync.Mutex
@@ -175,8 +175,8 @@ func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
 		t.Fatal("join never arrived")
 	}
 
-	// Track-frame komt direct na phx_reply ok. Geef de write-loop heel kort
-	// de tijd om bij de mock te landen.
+	// The track frame arrives right after phx_reply ok. Give the
+	// write-loop a brief moment to reach the mock.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		m.mu.Lock()

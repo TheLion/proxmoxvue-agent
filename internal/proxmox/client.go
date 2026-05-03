@@ -82,10 +82,10 @@ func (c *Client) ClusterResources(ctx context.Context) (json.RawMessage, error) 
 	return wrapper.Data, nil
 }
 
-// GetRaw doet een generieke GET op een willekeurig Proxmox-pad en geeft de
-// volledige response-body terug. Gebruikt door de read-RPC dispatcher; alle
-// path-validatie gebeurt daar (whitelist), niet hier — deze functie is een
-// dumme passthrough.
+// GetRaw performs a generic GET against any Proxmox path and returns
+// the full response body. Used by the read-RPC dispatcher; all path
+// validation happens there (whitelist), not here — this function is a
+// dumb passthrough.
 func (c *Client) GetRaw(ctx context.Context, path string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.APIURL+path, nil)
 	if err != nil {
@@ -137,8 +137,8 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	return nil
 }
 
-// deleteJSON DELETE't een resource. Gebruikt door snapshot.delete — Proxmox
-// returnt een UPID-envelope zoals de POST-endpoints.
+// deleteJSON DELETEs a resource. Used by snapshot.delete — Proxmox
+// returns a UPID envelope just like the POST endpoints.
 func (c *Client) deleteJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.cfg.APIURL+path, nil)
 	if err != nil {
@@ -168,8 +168,9 @@ func (c *Client) deleteJSON(ctx context.Context, path string, out any) error {
 	return nil
 }
 
-// postForm POST't een url.Values als application/x-www-form-urlencoded body —
-// het formaat dat Proxmox-write-endpoints (snapshot, vm-create, etc.) eisen.
+// postForm POSTs a url.Values as an application/x-www-form-urlencoded
+// body — the format Proxmox write endpoints (snapshot, vm-create,
+// etc.) require.
 func (c *Client) postForm(ctx context.Context, path string, form url.Values, out any) error {
 	body := strings.NewReader(form.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.APIURL+path, body)

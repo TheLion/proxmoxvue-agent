@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// ReadCommand is één rij uit public.read_commands zoals de agent die nodig
-// heeft. Endpoint en params worden door de dispatcher gevalideerd tegen een
-// whitelist; deze struct doet zelf geen check.
+// ReadCommand is one row from public.read_commands as the agent
+// needs it. Endpoint and params are validated against a whitelist by
+// the dispatcher; this struct does no checks of its own.
 type ReadCommand struct {
 	ID        int64           `json:"id"`
 	HostID    string          `json:"host_id,omitempty"`
@@ -19,8 +19,8 @@ type ReadCommand struct {
 	ExpiresAt time.Time       `json:"expires_at"`
 }
 
-// ClaimReadCommand zet status=pending → claimed atomair, identiek aan
-// ClaimCommand maar dan op de read_commands-tabel.
+// ClaimReadCommand atomically flips status=pending → claimed,
+// identical to ClaimCommand but against the read_commands table.
 func (c *Client) ClaimReadCommand(ctx context.Context, id int64) (bool, error) {
 	body := map[string]any{
 		"status":     "claimed",
@@ -38,9 +38,9 @@ func (c *Client) ClaimReadCommand(ctx context.Context, id int64) (bool, error) {
 	return len(returned) > 0, nil
 }
 
-// CompleteReadCommand schrijft status + result + completed_at. Bij failed
-// wordt result genegeerd en hoort de caller errMsg te zetten; result mag
-// nil zijn.
+// CompleteReadCommand writes status + result + completed_at. On
+// failed, result is ignored and the caller is expected to set
+// errMsg; result may be nil.
 func (c *Client) CompleteReadCommand(ctx context.Context, id int64, status string, result json.RawMessage, errMsg string) error {
 	body := map[string]any{
 		"status":       status,

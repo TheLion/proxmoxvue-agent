@@ -36,8 +36,8 @@ const (
 	ActionGuestDelete Action = "guest.delete"
 )
 
-// IsPowerAction rapporteert of de action een guest power-state-actie is
-// die via /status/{action} loopt.
+// IsPowerAction reports whether the action is a guest power-state
+// action routed through /status/{action}.
 func (a Action) IsPowerAction() bool {
 	switch a {
 	case ActionStart, ActionStop, ActionReboot, ActionShutdown, ActionSuspend, ActionResume:
@@ -46,7 +46,7 @@ func (a Action) IsPowerAction() bool {
 	return false
 }
 
-// IsSnapshotAction rapporteert of de action via een /snapshot-endpoint loopt.
+// IsSnapshotAction reports whether the action goes through a /snapshot endpoint.
 func (a Action) IsSnapshotAction() bool {
 	switch a {
 	case ActionSnapshotCreate, ActionSnapshotDelete, ActionSnapshotRollback:
@@ -55,8 +55,8 @@ func (a Action) IsSnapshotAction() bool {
 	return false
 }
 
-// IsCreateAction rapporteert of de action een nieuwe guest aanmaakt
-// (qemu/lxc) via een POST op de node-level guest-collection.
+// IsCreateAction reports whether the action creates a new guest
+// (qemu/lxc) via a POST against the node-level guest collection.
 func (a Action) IsCreateAction() bool {
 	switch a {
 	case ActionVMCreate, ActionLXCCreate:
@@ -65,7 +65,7 @@ func (a Action) IsCreateAction() bool {
 	return false
 }
 
-// IsKnown is true voor elke action die de dispatcher kan routeren.
+// IsKnown is true for every action the dispatcher can route.
 func (a Action) IsKnown() bool {
 	if a.IsPowerAction() || a.IsSnapshotAction() || a.IsCreateAction() {
 		return true
@@ -77,8 +77,8 @@ func (a Action) IsKnown() bool {
 	return false
 }
 
-// PerformAction POST't /api2/json/nodes/{node}/{kind}/{vmid}/status/{action}
-// en retourneert de door Proxmox toegewezen UPID.
+// PerformAction POSTs /api2/json/nodes/{node}/{kind}/{vmid}/status/{action}
+// and returns the UPID assigned by Proxmox.
 func (c *Client) PerformAction(ctx context.Context, kind GuestKind, node string, vmid int, action Action) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/status/%s", node, kind, vmid, action)
 	var wrapper struct {
@@ -90,10 +90,10 @@ func (c *Client) PerformAction(ctx context.Context, kind GuestKind, node string,
 	return wrapper.Data, nil
 }
 
-// CreateSnapshot POST /api2/json/nodes/{node}/{kind}/{vmid}/snapshot. Form-
-// encoded body met snapname + optionele description + vmstate=1. Returnt de
-// UPID; caller wacht via AwaitTaskCompletion (memory-snapshots ≥120s).
-// `includeVmState` is alleen geldig voor QEMU + running.
+// CreateSnapshot POST /api2/json/nodes/{node}/{kind}/{vmid}/snapshot.
+// Form-encoded body with snapname + optional description + vmstate=1.
+// Returns the UPID; the caller waits via AwaitTaskCompletion
+// (memory snapshots ≥120s). `includeVmState` is only valid for QEMU + running.
 func (c *Client) CreateSnapshot(ctx context.Context, kind GuestKind, node string, vmid int, name, description string, includeVmState bool) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/snapshot", node, kind, vmid)
 	form := url.Values{"snapname": {name}}
@@ -113,8 +113,9 @@ func (c *Client) CreateSnapshot(ctx context.Context, kind GuestKind, node string
 }
 
 // DeleteSnapshot DELETE /api2/json/nodes/{node}/{kind}/{vmid}/snapshot/{name}.
-// Returnt de UPID. Proxmox URL-encodet snapname zelf niet — caller heeft hier
-// al een gevalideerde naam (SnapshotNamePattern), dus geen URL-injectie-risk.
+// Returns the UPID. Proxmox does not URL-encode snapname itself — by
+// the time we get here the caller has already validated the name
+// (SnapshotNamePattern), so there is no URL-injection risk.
 func (c *Client) DeleteSnapshot(ctx context.Context, kind GuestKind, node string, vmid int, name string) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/snapshot/%s", node, kind, vmid, url.PathEscape(name))
 	var wrapper struct {
@@ -127,8 +128,9 @@ func (c *Client) DeleteSnapshot(ctx context.Context, kind GuestKind, node string
 }
 
 // RollbackSnapshot POST /api2/json/nodes/{node}/{kind}/{vmid}/snapshot/{name}/rollback.
-// Returnt de UPID. Proxmox verwijdert tijdens rollback alle snapshots ná deze
-// in de chain — caller (UI) communiceert dat aan de gebruiker.
+// Returns the UPID. During rollback Proxmox removes every snapshot
+// taken after this one in the chain — the caller (UI) communicates
+// that to the user.
 func (c *Client) RollbackSnapshot(ctx context.Context, kind GuestKind, node string, vmid int, name string) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/%s/%d/snapshot/%s/rollback", node, kind, vmid, url.PathEscape(name))
 	var wrapper struct {
@@ -140,10 +142,10 @@ func (c *Client) RollbackSnapshot(ctx context.Context, kind GuestKind, node stri
 	return wrapper.Data, nil
 }
 
-// CreateVMSpec bevat de minimale velden voor een QEMU VM-create. Subset van
-// Proxmox' /api2/json/nodes/{node}/qemu params; uitgebreid wanneer iOS meer
-// opties exposeert. ostype=l26 wordt server-side geïnjecteerd zodat iOS dat
-// niet mee hoeft te sturen.
+// CreateVMSpec carries the minimum fields for a QEMU VM create.
+// Subset of Proxmox's /api2/json/nodes/{node}/qemu params; expand when
+// iOS exposes more options. ostype=l26 is injected server-side so iOS
+// doesn't need to send it.
 type CreateVMSpec struct {
 	Node          string
 	VMID          int
@@ -155,7 +157,7 @@ type CreateVMSpec struct {
 	NetworkBridge string
 }
 
-// CreateVM POST /api2/json/nodes/{node}/qemu. Returnt de UPID.
+// CreateVM POST /api2/json/nodes/{node}/qemu. Returns the UPID.
 func (c *Client) CreateVM(ctx context.Context, spec CreateVMSpec) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/qemu", spec.Node)
 	form := url.Values{
@@ -176,10 +178,10 @@ func (c *Client) CreateVM(ctx context.Context, spec CreateVMSpec) (string, error
 	return wrapper.Data, nil
 }
 
-// CreateLXCSpec bevat de minimale velden voor een LXC-container-create.
-// Het Password-veld bevat plaintext credentials op het moment dat
-// CreateLXC wordt aangeroepen — bovenliggende dispatcher heeft het al
-// HPKE-decrypt (#1476). Niet loggen.
+// CreateLXCSpec carries the minimum fields for an LXC container
+// create. The Password field holds plaintext credentials at the
+// moment CreateLXC is called — the upstream dispatcher has already
+// HPKE-decrypted it (#1476). Do not log.
 type CreateLXCSpec struct {
 	Node          string
 	VMID          int
@@ -194,7 +196,7 @@ type CreateLXCSpec struct {
 	Unprivileged  bool
 }
 
-// CreateLXC POST /api2/json/nodes/{node}/lxc. Returnt de UPID.
+// CreateLXC POST /api2/json/nodes/{node}/lxc. Returns the UPID.
 func (c *Client) CreateLXC(ctx context.Context, spec CreateLXCSpec) (string, error) {
 	path := fmt.Sprintf("/api2/json/nodes/%s/lxc", spec.Node)
 	form := url.Values{
@@ -218,11 +220,11 @@ func (c *Client) CreateLXC(ctx context.Context, spec CreateLXCSpec) (string, err
 	return wrapper.Data, nil
 }
 
-// DeleteGuest DELETE /api2/json/nodes/{node}/{kind}/{vmid}. Met
-// `destroyDisks` worden niet-gelinkte disks mee verwijderd
-// (`destroy-unreferenced-disks=1`); met `purgeBackups` ook alle
-// back-ups (`purge=1`). Proxmox eist dat de guest gestopt is — anders
-// krijgt de caller een 400 doorgegeven.
+// DeleteGuest DELETE /api2/json/nodes/{node}/{kind}/{vmid}. With
+// `destroyDisks`, unreferenced disks are removed too
+// (`destroy-unreferenced-disks=1`); with `purgeBackups` all backups
+// are wiped (`purge=1`). Proxmox requires the guest to be stopped —
+// otherwise the caller gets a 400 propagated.
 func (c *Client) DeleteGuest(ctx context.Context, kind GuestKind, node string, vmid int, destroyDisks, purgeBackups bool) (string, error) {
 	q := url.Values{}
 	if destroyDisks {
@@ -251,11 +253,11 @@ func boolToFlag(b bool) string {
 	return "0"
 }
 
-// SnapshotNamePattern is dezelfde validatie die Proxmox toepast op snapname
-// (`[a-z][a-z0-9_-]+/i` in PVE::JSONSchema; min 2 chars totaal). Lengte
-// gemaximeerd op 40 als pragmatische cap — Proxmox stelt zelf geen max.
-// Mismatch = 400 van Proxmox; vóór de roundtrip checken geeft een
-// duidelijker fout in iOS.
+// SnapshotNamePattern is the same validation Proxmox applies to
+// snapname (`[a-z][a-z0-9_-]+/i` in PVE::JSONSchema; min 2 chars total).
+// Length capped at 40 as a pragmatic cap — Proxmox itself sets no
+// max. Mismatch = 400 from Proxmox; checking before the roundtrip
+// gives a clearer error in iOS.
 var SnapshotNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{1,39}$`)
 
 type TaskStatus struct {
@@ -284,7 +286,7 @@ func (c *Client) TaskStatus(ctx context.Context, node, upid string) (TaskStatus,
 	}, nil
 }
 
-// AwaitTaskCompletion polt tot de task klaar is of de timeout verstrijkt.
+// AwaitTaskCompletion polls until the task is done or the timeout elapses.
 func (c *Client) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (TaskStatus, error) {
 	const pollInterval = 500 * time.Millisecond
 	deadline := time.Now().Add(timeout)
