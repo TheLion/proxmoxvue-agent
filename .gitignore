@@ -9,3 +9,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Internal planning docs — not for public consumption
+docs/PLAN-*.md

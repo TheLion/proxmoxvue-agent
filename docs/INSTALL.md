@@ -87,6 +87,50 @@ sudo journalctl -u proxmoxvue-agent -f
 
 You should see `snapshot pushed (N bytes)` every 30 seconds.
 
+## Configuration reference
+
+The first run of `--register` and every restart of `--run` rewrites
+`/etc/proxmoxvue-agent/config.yml` with all keys present and an
+inline comment above each one — you don't need to memorize this
+table. It is included here for operators who want to see the full
+surface up-front, or who maintain the file via configuration
+management.
+
+### `supabase:` — cluster identity (don't edit manually)
+
+| Key | Notes |
+|---|---|
+| `project_ref` | Supabase project ref. Set by `--register`. |
+| `cluster_id` | Cluster UUID issued by the backend during enrollment. |
+| `refresh_token` | Long-lived refresh token. Re-run `--register` if revoked. |
+| `private_key` | X25519 private key (base64) used for HPKE-decrypt of LXC create-passwords. Generated at `--register`. **Treat as a secret.** Use `--rotate-key` to replace it. |
+
+### `proxmox:` — direct connection to the local Proxmox VE API
+
+| Key | Default | Description |
+|---|---|---|
+| `api_url` | — | Proxmox API endpoint, e.g. `https://127.0.0.1:8006` |
+| `api_token_id` | — | Token ID in the form `user@realm!tokenid` |
+| `api_token_secret` | — | Token secret (UUID). Treat like a password. |
+| `verify_tls` | `false` | Verify the Proxmox TLS cert. Leave `false` for the default self-signed cert. |
+
+### `agent:` — agent loop + logging
+
+| Key | Default | Description |
+|---|---|---|
+| `poll_interval_seconds` | `30` | Tick frequency for the snapshot push loop. |
+| `log_level` | `info` | One of `debug` / `info` / `warn` / `error`. |
+| `log_file_path` | `/var/log/proxmoxvue-agent.log` | Plain-text log file written via lumberjack rotation. |
+| `log_max_size_mb` | `10` | Rotate the active file once it reaches this many MB. |
+| `log_max_backups` | `5` | Keep this many rotated files; FIFO, oldest deleted first. |
+| `log_max_age_days` | `30` | Delete rotated files older than this many days. |
+
+After editing the file, restart the service:
+
+```sh
+sudo systemctl restart proxmoxvue-agent
+```
+
 ## Manual install
 
 If you prefer not to pipe a remote script through `sudo sh`:
