@@ -22,10 +22,10 @@ and [docs/INSTALL.md](docs/INSTALL.md) for a manual install.
 ## What it does
 
 - Authenticates outbound-only to the ProxmoxVue Supabase backend (no
-  inbound ports opened on your host)
+  inbound ports opened on your host or firewall)
 - Reports cluster status every 30 seconds so the iOS app can show live
   metrics
-- Listens for VM/LXC commands (start, stop, reboot, snapshot) and
+- Listens for VM/LXC commands (start, stop, reboot, snapshot, etc) and
   executes them against the local Proxmox REST API
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data-flow
