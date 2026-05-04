@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -99,6 +100,7 @@ func (c *Client) GetRaw(ctx context.Context, path string) (json.RawMessage, erro
 		return nil, fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("proxmox HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -123,6 +125,7 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("proxmox HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -152,6 +155,7 @@ func (c *Client) deleteJSON(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("proxmox HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -186,6 +190,7 @@ func (c *Client) postForm(ctx context.Context, path string, form url.Values, out
 		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("proxmox HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -219,6 +224,7 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any
 		return fmt.Errorf("do request: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("proxmox HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {

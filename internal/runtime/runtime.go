@@ -34,6 +34,9 @@ func Start(ctx context.Context, configPath, version string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if info, statErr := os.Stat(configPath); statErr == nil {
+		slog.Debug("config loaded", "path", configPath, "mtime", info.ModTime().UTC().Format(time.RFC3339), "size", info.Size())
+	}
 	if err := validate(cfg); err != nil {
 		return fmt.Errorf("config invalid: %w", err)
 	}
@@ -208,11 +211,18 @@ func handleReadCommand(ctx context.Context, d *commands.ReadDispatcher, cmd supa
 }
 
 func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clusterID string) error {
+	fetchStart := time.Now()
 	resources, err := pve.ClusterResources(ctx)
 	if err != nil {
 		slog.Error("poll proxmox failed", "err", err)
 		return err
 	}
+	fetchDuration := time.Since(fetchStart)
+	nodes, qemu, lxc, storage := countSnapshotEntries(resources)
+	slog.Debug("snapshot fetch",
+		"bytes", len(resources),
+		"nodes", nodes, "qemu", qemu, "lxc", lxc, "storage", storage,
+		"duration_ms", fetchDuration.Milliseconds())
 	if err := sb.PushSnapshot(ctx, clusterID, resources); err != nil {
 		slog.Error("push snapshot failed", "err", err)
 		return err
@@ -222,6 +232,32 @@ func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clu
 	// Push failures stay at ERROR.
 	slog.Debug("snapshot pushed", "bytes", len(resources))
 	return nil
+}
+
+// countSnapshotEntries returns the count of node / qemu / lxc / storage
+// entries in a /cluster/resources payload. Failure to parse returns
+// zeroes — the DEBUG line is best-effort observability and must never
+// affect the push path.
+func countSnapshotEntries(resources []byte) (nodes, qemu, lxc, storage int) {
+	var entries []struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(resources, &entries); err != nil {
+		return
+	}
+	for _, e := range entries {
+		switch e.Type {
+		case "node":
+			nodes++
+		case "qemu":
+			qemu++
+		case "lxc":
+			lxc++
+		case "storage":
+			storage++
+		}
+	}
+	return
 }
 
 func validate(cfg config.File) error {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
@@ -45,6 +46,7 @@ func (c *Client) postRow(ctx context.Context, path string, body []byte) error {
 			return 0, "", fmt.Errorf("do request: %w", err)
 		}
 		defer resp.Body.Close()
+		slog.Debug("supabase HTTP", "method", req.Method, "url", req.URL.String(), "status", resp.StatusCode)
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return resp.StatusCode, "", nil

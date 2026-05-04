@@ -180,6 +180,7 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	if err != nil {
 		return fmt.Errorf("claim %d: %w", cmd.ID, err)
 	}
+	slog.Debug("command claim attempt", "id", cmd.ID, "kind", cmd.Kind, "claimed", ok)
 	if !ok {
 		return nil
 	}
@@ -203,6 +204,7 @@ func (d *Dispatcher) Handle(ctx context.Context, cmd supabase.Command) error {
 	if p.Node == "" || p.VMID <= 0 {
 		return d.store.CompleteCommand(ctx, cmd.ID, "failed", map[string]any{"error": "missing node or vmid"})
 	}
+	slog.Debug("command payload validated", "id", cmd.ID, "kind", cmd.Kind, "guest_kind", p.GuestKind, "node", p.Node, "vmid", p.VMID)
 
 	// 4. Dispatch to Proxmox. Per-category routing: power actions go to
 	//    /status/{action}, snapshot actions to /snapshot. Wait-timeout

@@ -3,6 +3,7 @@ package proxmox
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -290,11 +291,13 @@ func (c *Client) TaskStatus(ctx context.Context, node, upid string) (TaskStatus,
 func (c *Client) AwaitTaskCompletion(ctx context.Context, node, upid string, timeout time.Duration) (TaskStatus, error) {
 	const pollInterval = 500 * time.Millisecond
 	deadline := time.Now().Add(timeout)
+	tick := 0
 	for {
 		st, err := c.TaskStatus(ctx, node, upid)
 		if err != nil {
 			return st, err
 		}
+		slog.Debug("proxmox await-task tick", "node", node, "upid", upid, "tick", tick, "done", st.Done)
 		if st.Done {
 			return st, nil
 		}
@@ -306,5 +309,6 @@ func (c *Client) AwaitTaskCompletion(ctx context.Context, node, upid string, tim
 			return st, ctx.Err()
 		case <-time.After(pollInterval):
 		}
+		tick++
 	}
 }

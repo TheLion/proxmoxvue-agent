@@ -132,11 +132,13 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 	defer dialCancel()
 
 	url := fmt.Sprintf("%s?apikey=%s&vsn=1.0.0", c.realtimeURL, PublishableKey)
+	slog.Debug("realtime ws dial", "table", table, "url", c.realtimeURL)
 	conn, _, err := websocket.Dial(dialCtx, url, nil)
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "bye")
+	slog.Debug("realtime ws connected", "table", table)
 
 	topic := fmt.Sprintf("realtime:%s:%s", table, clusterID)
 	var ref int64
@@ -172,6 +174,7 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		"ref":      joinRef,
 		"join_ref": joinRef,
 	}
+	slog.Debug("realtime channel join request", "topic", topic, "table", table, "cluster_id", clusterID)
 	if err := writeJSON(dialCtx, conn, join); err != nil {
 		return fmt.Errorf("send join: %w", err)
 	}
@@ -199,6 +202,7 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 	if reply.Payload.Status != "ok" {
 		return fmt.Errorf("join rejected: %s", string(reply.Payload.Response))
 	}
+	slog.Debug("realtime channel joined", "topic", topic)
 	dialCancel()
 
 	// Track presence: without an explicit track frame iOS doesn't see
@@ -219,6 +223,7 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		"ref":      nextRef(),
 		"join_ref": joinRef,
 	}
+	slog.Debug("realtime presence track sent", "topic", topic, "cluster_id", clusterID)
 	if err := writeJSON(ctx, conn, trackMsg); err != nil {
 		slog.Warn("realtime presence track failed", "err", err)
 	}
@@ -291,6 +296,10 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		if err := json.Unmarshal(frame.Payload, &p); err != nil {
 			continue
 		}
+		// Pre-filter visibility: lets DEBUG sessions confirm Realtime
+		// is delivering events even when they're being dropped because
+		// type != INSERT.
+		slog.Debug("realtime postgres_changes received", "table", table, "type", p.Data.Type)
 		if p.Data.Type != "INSERT" {
 			continue
 		}

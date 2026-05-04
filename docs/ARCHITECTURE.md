@@ -148,8 +148,9 @@ information the Proxmox web-UI displays on its dashboard.
 
 ## Logging
 
-The agent logs to stdout/stderr (captured by systemd-journald).
-Credentials are never logged:
+The agent logs to stdout/stderr (captured by systemd-journald) and a
+rotated file under `/var/log/proxmoxvue-agent/`. Credentials are never
+logged:
 
 - Config structs have custom `String()` methods that render tokens as
   `[REDACTED]` when formatted with `%+v`
@@ -157,3 +158,31 @@ Credentials are never logged:
   can't accidentally leak tokens
 - Log level defaults to `INFO`; enable `DEBUG` via `AGENT_LOG_LEVEL=debug`
   environment variable in the systemd unit (tokens remain redacted)
+
+### Level allocation
+
+Each level has a single intent — operators and developers should be
+able to predict where to look without scanning unrelated noise.
+
+- **ERROR** — operator action required. Examples: command dispatch
+  failure (Proxmox API), command claim/complete DB-failure, Proxmox
+  poll failure, Supabase push failure, session permanently revoked.
+- **WARN** — transient condition that the agent recovers from
+  automatically. Examples: realtime channel join rejected, WS frame
+  decode skipped, transient HTTP retries.
+- **INFO** — operator default — kerngebeurtenissen worth one line in
+  journalctl. Examples: agent started/stopping, snapshot pushed (per
+  push), command claimed/dispatched/done/expired, refresh token
+  rotated.
+- **DEBUG** — every observable agent activity, used for E2E
+  troubleshooting and performance tuning. Includes: realtime WS
+  dial/connect, channel join request + reply, presence track,
+  heartbeat (every 25s), postgres_changes events (pre-filter),
+  HTTP request + response (method + URL + status, no bodies),
+  snapshot fetch counts/size/duration, config load (path + mtime),
+  command pipeline (claim attempt, payload-validation, await-poll
+  tick).
+
+If you find yourself adding a `slog.Info` for a high-volume happy-path
+event (more than once per minute), it almost certainly belongs at
+DEBUG instead.
