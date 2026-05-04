@@ -130,9 +130,19 @@ chmod 0644 "$UNIT"
 systemctl daemon-reload
 
 # ── 7. enroll (skipped on --upgrade-only) ────────────────────────────
+# Re-attach a real TTY when one is available so --register can prompt
+# interactively for Proxmox credentials. Without this redirect the
+# child process inherits the pipe stdin from `curl | sh`, the
+# isStdinTTY() check returns false, and the prompt is skipped — leaving
+# the operator to edit config.yml by hand. Cloud-init / Ansible runs
+# (no /dev/tty) fall back to the non-interactive code path.
 if [ "$UPGRADE_ONLY" -eq 0 ]; then
   echo "enrolling host..."
-  "$BINARY" --register "$ENROLLMENT_CODE"
+  if [ -e /dev/tty ]; then
+    "$BINARY" --register "$ENROLLMENT_CODE" < /dev/tty
+  else
+    "$BINARY" --register "$ENROLLMENT_CODE"
+  fi
 fi
 
 # ── 8. start service ─────────────────────────────────────────────────

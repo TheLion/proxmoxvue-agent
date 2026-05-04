@@ -25,13 +25,19 @@ The script:
 4. Installs the binary to `/usr/local/bin/proxmoxvue-agent`
 5. Creates `/etc/proxmoxvue-agent/` (mode `0700`, owner `root`)
 6. Writes a systemd unit at `/etc/systemd/system/proxmoxvue-agent.service`
-7. Calls `proxmoxvue-agent --register <CODE>` to exchange the code for credentials
+7. Runs `proxmoxvue-agent --register <CODE>` — exchanges the code for
+   Supabase credentials and **interactively asks for your Proxmox API
+   URL, token id, token secret, and TLS preference** (see [Proxmox API
+   token](#proxmox-api-token) below for how to mint a token first).
+   Each field can be skipped with Enter if it is already in the config.
 8. Enables and starts the service
 
-After step 7 you must add your Proxmox API token to
-`/etc/proxmoxvue-agent/config.yml` — see [Proxmox API token](#proxmox-api-token)
-below. The service won't start successfully until that section is
-populated.
+> **Headless / non-TTY installs** (cloud-init, Ansible, scripted runs):
+> the prompt is skipped automatically when no terminal is attached.
+> In that case, populate the `proxmox:` section of
+> `/etc/proxmoxvue-agent/config.yml` manually after the install — see
+> [Proxmox API token](#proxmox-api-token) for the exact YAML — and
+> then `sudo systemctl restart proxmoxvue-agent`.
 
 ## Proxmox API token
 
@@ -48,13 +54,21 @@ password:
    `PVEVMAdmin` (for start/stop/reboot later) or `PVEAuditor` (read-only
    for snapshot-push only)
 
-Then edit `/etc/proxmoxvue-agent/config.yml` (mode `0600`):
+With the token in hand, the install script's interactive prompt asks
+for:
+
+| Prompt | Example |
+|---|---|
+| `api_url` | `https://127.0.0.1:8006` |
+| `api_token_id` | `root@pam!proxmoxvue-agent` |
+| `api_token_secret` | `00000000-0000-0000-0000-000000000000` |
+| `verify_tls (y/N)` | `N` (Proxmox uses self-signed certs by default) |
+
+If you skipped the prompt or are running headless, edit
+`/etc/proxmoxvue-agent/config.yml` (mode `0600`) so the `proxmox:`
+section looks like this:
 
 ```yaml
-supabase:
-  project_ref: fjesjyoxpkalaudfyebx
-  host_id: <filled by --register>
-  refresh_token: <filled by --register>
 proxmox:
   api_url: https://127.0.0.1:8006
   api_token_id: root@pam!proxmoxvue-agent
@@ -62,7 +76,9 @@ proxmox:
   verify_tls: false
 ```
 
-Finally:
+(The `supabase:` block is filled in for you by `--register`.)
+
+Then:
 
 ```sh
 sudo systemctl restart proxmoxvue-agent
@@ -93,7 +109,8 @@ sudo install -m 0755 proxmoxvue-agent /usr/local/bin/proxmoxvue-agent
 # 3. Prepare config dir
 sudo install -d -m 0700 -o root -g root /etc/proxmoxvue-agent
 
-# 4. Enroll (this writes /etc/proxmoxvue-agent/config.yml at mode 0600)
+# 4. Enroll (writes /etc/proxmoxvue-agent/config.yml at mode 0600 and
+#    interactively prompts for your Proxmox API URL + token)
 sudo proxmoxvue-agent --register <CODE>
 
 # 5. Install systemd unit (copy scripts/proxmoxvue-agent.service from this repo)
