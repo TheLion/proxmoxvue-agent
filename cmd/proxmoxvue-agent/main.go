@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -229,7 +231,24 @@ func runRegister(args []string) {
 
 	fmt.Printf("registered cluster %s (host %s), config written to %s\n", result.ClusterID, result.HostID, *configPath)
 	fmt.Println()
-	if cfg.Proxmox.APIURL == "" || cfg.Proxmox.APITokenSecret == "" {
+	proxmoxIncomplete := cfg.Proxmox.APIURL == "" || cfg.Proxmox.APITokenSecret == ""
+	if proxmoxIncomplete {
+		// Interactive prompt only on a TTY — scripted/automation
+		// installs (CI, ansible stdin redirected) keep working with
+		// the printed manual-edit instructions instead.
+		if isStdinTTY() {
+			if changed := promptProxmoxConfig(&cfg); changed {
+				if err := config.Save(*configPath, cfg); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to write Proxmox credentials to config: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("\nProxmox credentials written to %s\n", *configPath)
+				fmt.Println("restart the agent to start dispatching commands:")
+				fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
+				fmt.Println("  or: proxmoxvue-agent --run  (foreground)")
+				return
+			}
+		}
 		fmt.Println("next: add your Proxmox API token to the config file:")
 		fmt.Println("  proxmox:")
 		fmt.Println("    api_url: https://<host>:8006")
@@ -237,11 +256,79 @@ func runRegister(args []string) {
 		fmt.Println("    api_token_secret: <uuid>")
 		fmt.Println("    verify_tls: false")
 		fmt.Println("then: systemctl restart proxmoxvue-agent")
-	} else {
-		fmt.Println("Proxmox config is ready — restart the agent:")
-		fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
-		fmt.Println("  or: proxmoxvue-agent --run  (foreground)")
+		return
 	}
+	fmt.Println("Proxmox config is ready — restart the agent:")
+	fmt.Println("  systemctl restart proxmoxvue-agent  (systemd)")
+	fmt.Println("  or: proxmoxvue-agent --run  (foreground)")
+}
+
+// isStdinTTY reports whether stdin is connected to a terminal. Used to
+// gate interactive prompts: pipes, redirected stdin, and headless CI
+// runs all return false so we never block on a read that never gets
+// input.
+func isStdinTTY() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// promptProxmoxConfig fills empty Proxmox fields in cfg from interactive
+// stdin input. Already-populated fields are left untouched
+// (non-destructive merge — re-running --register against a partially
+// configured agent must not wipe an api_token_secret). Returns true
+// when at least one field was filled in, signalling the caller to
+// persist the config.
+//
+// VerifyTLS is only prompted on a fresh install (all three string
+// fields empty); on partial configs the existing bool is preserved
+// because we cannot tell explicit-false from the zero value.
+func promptProxmoxConfig(cfg *config.File) bool {
+	reader := bufio.NewReader(os.Stdin)
+	freshInstall := cfg.Proxmox.APIURL == "" && cfg.Proxmox.APITokenID == "" && cfg.Proxmox.APITokenSecret == ""
+	changed := false
+
+	fmt.Println()
+	fmt.Println("set up Proxmox API credentials (press Enter to skip a field):")
+
+	if cfg.Proxmox.APIURL == "" {
+		if v := readLine(reader, "  api_url (e.g. https://pve.example.com:8006): "); v != "" {
+			cfg.Proxmox.APIURL = v
+			changed = true
+		}
+	}
+	if cfg.Proxmox.APITokenID == "" {
+		if v := readLine(reader, "  api_token_id (e.g. root@pam!claude): "); v != "" {
+			cfg.Proxmox.APITokenID = v
+			changed = true
+		}
+	}
+	if cfg.Proxmox.APITokenSecret == "" {
+		if v := readLine(reader, "  api_token_secret (uuid): "); v != "" {
+			cfg.Proxmox.APITokenSecret = v
+			changed = true
+		}
+	}
+	if freshInstall && changed {
+		v := readLine(reader, "  verify_tls (y/N) [N for self-signed homelab certs]: ")
+		v = strings.ToLower(v)
+		cfg.Proxmox.VerifyTLS = v == "y" || v == "yes"
+	}
+	return changed
+}
+
+// readLine prints the prompt and returns the trimmed line read from
+// the reader. EOF and read errors collapse to an empty string so the
+// caller can treat "no input" identically to "user pressed Enter".
+func readLine(r *bufio.Reader, prompt string) string {
+	fmt.Print(prompt)
+	line, err := r.ReadString('\n')
+	if err != nil && line == "" {
+		return ""
+	}
+	return strings.TrimSpace(line)
 }
 
 // runRotateKey generates a fresh HPKE keypair, persists the private key
