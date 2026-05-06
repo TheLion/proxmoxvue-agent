@@ -15,6 +15,15 @@
   <a href="https://proxmoxvue.app/support/">Support</a>
 </p>
 
+<p align="center">
+  <a href="https://apps.apple.com/app/proxmoxvue/id6762568065" target="_blank" rel="noopener">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/white/en-us?size=250x83">
+      <img alt="Download on the App Store" src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83" height="50">
+    </picture>
+  </a>
+</p>
+
 ---
 
 The agent runs on your Proxmox VE host and bridges your cluster to
