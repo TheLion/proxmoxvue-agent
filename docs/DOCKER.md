@@ -90,6 +90,40 @@ The agent only makes outbound connections — to Supabase (HTTPS + WSS to
 ports, no inbound firewall rules. If your Docker host sits behind an
 egress firewall, allow `*.supabase.co` on 443.
 
+## Health check
+
+The image ships with a Docker `HEALTHCHECK` so `docker ps`, Uptime
+Kuma, and any other Docker-aware monitor can tell `healthy` from
+`unhealthy` instead of just "running":
+
+```sh
+docker inspect --format='{{.State.Health.Status}}' proxmoxvue-agent
+```
+
+**How it works.** The agent writes an `INFO` log line every poll
+(default 30 seconds — `snapshot pushed (N bytes)` etc.). The
+healthcheck calls `find ${PROXMOXVUE_CONFIG_DIR}/agent.log -mmin -2`
+and considers the container unhealthy if the log file's mtime hasn't
+been touched in the last two minutes. That catches the most common
+failure mode that bare `docker ps` misses: the process is still up but
+the poll loop has frozen (network partition that exceeded retry
+budgets, hung Proxmox API call, etc.).
+
+**Caveat — log levels.** The check assumes per-poll INFO output. If
+you set `AGENT_LOG_LEVEL=warn` or `error`, a healthy idle agent stops
+producing per-poll log lines and the healthcheck will eventually flip
+to unhealthy. Stick with `info` (the default) when running in a
+container, or override the healthcheck at runtime:
+
+```sh
+docker run … --health-cmd="<your-own-check>" …
+```
+
+A future agent release is expected to expose an HTTP `/health`
+endpoint with richer state (Supabase session age, Proxmox-API last
+success, refresh-token expiry) that doesn't depend on log volume — see
+the project backlog. Until then, log-mtime is the pragmatic signal.
+
 ## Build it yourself
 
 The image is published from CI; if you want to build locally for
