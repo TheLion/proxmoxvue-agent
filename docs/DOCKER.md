@@ -111,11 +111,6 @@ partition that exceeded retry budgets, hung Proxmox API call, etc.).
 The heartbeat is independent of log output, so any `AGENT_LOG_LEVEL`
 (`debug`, `info`, `warn`, `error`) keeps the healthcheck working.
 
-A future agent release is expected to expose an HTTP `/health`
-endpoint with richer state (Supabase session age, Proxmox-API last
-success, refresh-token expiry) — see the project backlog. Until then,
-the heartbeat file is the pragmatic signal.
-
 ## Build it yourself
 
 The image is published from CI; if you want to build locally for
