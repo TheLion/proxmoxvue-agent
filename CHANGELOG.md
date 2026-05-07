@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Docker `HEALTHCHECK` now reads `agent.log_file_path` from `config.yml`
+  via a new `scripts/docker-healthcheck.sh` instead of hard-coding
+  `${PROXMOXVUE_CONFIG_DIR}/agent.log`. Operators whose config uses the
+  agent's compiled-in default (`/var/log/proxmoxvue-agent.log`) or any
+  custom path no longer go `unhealthy` despite a working poll loop.
+
 ### Added
 - HPKE keypair auto-heal at agent startup — when `supabase.private_key`
   is missing in config (e.g. installs from before #1476), the agent

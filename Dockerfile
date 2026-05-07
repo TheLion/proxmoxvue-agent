@@ -24,20 +24,17 @@ RUN apk add --no-cache ca-certificates tini \
     && chmod 0700 /etc/proxmoxvue-agent
 COPY --from=builder /out/proxmoxvue-agent /usr/local/bin/proxmoxvue-agent
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
+COPY scripts/docker-healthcheck.sh /usr/local/bin/docker-healthcheck.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh
 
 VOLUME ["/etc/proxmoxvue-agent"]
 
-# Pin the config-dir + log-path so HEALTHCHECK and entrypoint share one
-# fixed location. Operators who override either env var should also
-# override HEALTHCHECK at run-time (see docs/DOCKER.md).
 ENV PROXMOXVUE_CONFIG_DIR=/etc/proxmoxvue-agent
 
 # Liveness signal: the agent writes an INFO log line every poll
-# (default 30s, see scripts/docker-entrypoint.sh). A stale file mtime
-# (>2 min) means the poll loop has frozen even though the process is
-# still up — exactly what `docker ps` / Uptime Kuma can't see otherwise.
+# (default 30s). The healthcheck script reads agent.log_file_path
+# from config.yml so it always points at the actual log file.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-  CMD test -n "$(find ${PROXMOXVUE_CONFIG_DIR}/agent.log -mmin -2 2>/dev/null)" || exit 1
+  CMD /usr/local/bin/docker-healthcheck.sh
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
