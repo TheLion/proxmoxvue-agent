@@ -46,7 +46,7 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,format=short
           flavor: |
-            latest=auto
+            latest=true
 
       - name: Resolve VERSION build-arg
         id: ver
