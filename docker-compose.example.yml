@@ -27,9 +27,11 @@ services:
       PROXMOX_VERIFY_TLS: "false"          # set true if Proxmox has a trusted cert
       AGENT_POLL_INTERVAL_SECONDS: "30"
       AGENT_LOG_LEVEL: "info"              # debug | info | warn | error
-      # Default routes logs to stderr → `docker logs`. Override with a
-      # real path if you want lumberjack file rotation inside the container.
-      # AGENT_LOG_FILE_PATH: "/var/log/proxmoxvue-agent.log"
+      # Logs are fanned out to both stderr (`docker logs`) and a file in
+      # the config volume (default: /etc/proxmoxvue-agent/agent.log,
+      # rotated by lumberjack). Override the path if you want logs in a
+      # separate mount.
+      # AGENT_LOG_FILE_PATH: "/var/log/proxmoxvue-agent/agent.log"
     volumes:
       - proxmoxvue-agent-config:/etc/proxmoxvue-agent
 

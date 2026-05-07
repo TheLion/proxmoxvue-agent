@@ -131,24 +131,27 @@ func runAgent(args []string) {
 	}
 }
 
-// newLogSink builds a lumberjack writer from the given rotation
-// config. If LogFilePath is not writable (typical during local
-// `go run` without /var/log access) it falls back to stderr — that
-// way the agent doesn't crash on a logging path; runtime.Start can
-// still report its real errors.
+// newLogSink builds a writer that fans every log line out to both
+// stderr (so `docker logs` / `journalctl -u proxmoxvue-agent` see
+// everything live) and a lumberjack-rotated file at LogFilePath.
+// If LogFilePath is not writable (typical during local `go run`
+// without /var/log access, or in containers that don't mount a log
+// volume) it falls back to stderr-only — that way the agent doesn't
+// crash on a logging path; runtime.Start can still report its real
+// errors.
 func newLogSink(r config.LogRotation) io.Writer {
 	probe, err := os.OpenFile(r.FilePath, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "log file %s not writable (%v) — falling back to stderr\n", r.FilePath, err)
+		fmt.Fprintf(os.Stderr, "log file %s not writable (%v) — falling back to stderr-only\n", r.FilePath, err)
 		return os.Stderr
 	}
 	_ = probe.Close()
-	return &lumberjack.Logger{
+	return io.MultiWriter(os.Stderr, &lumberjack.Logger{
 		Filename:   r.FilePath,
 		MaxSize:    r.MaxSizeMB,
 		MaxBackups: r.MaxBackups,
 		MaxAge:     r.MaxAgeDays,
-	}
+	})
 }
 
 func runRegister(args []string) {
