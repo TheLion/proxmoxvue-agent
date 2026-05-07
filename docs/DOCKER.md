@@ -57,7 +57,7 @@ named volume so the registration survives container restarts.
 | `PROXMOX_VERIFY_TLS` | no | `false` | Set `true` if your Proxmox host has a trusted TLS cert. |
 | `AGENT_POLL_INTERVAL_SECONDS` | no | `30` | Tick frequency for the snapshot push loop. |
 | `AGENT_LOG_LEVEL` | no | `info` | One of `debug` / `info` / `warn` / `error`. |
-| `AGENT_LOG_FILE_PATH` | no | `/var/log/proxmoxvue-agent.log` | The agent also logs to stderr (visible via `docker logs`). |
+| `AGENT_LOG_FILE_PATH` | no | `/dev/null/agent.log` | Deliberately non-writable so the agent falls back to stderr — every INFO event then shows up in `docker logs`. Override with a real path if you want file-based logging inside the container. |
 | `PROXMOXVUE_CONFIG_DIR` | no | `/etc/proxmoxvue-agent` | Override only if you need a different mount path. |
 
 The env vars are read by the entrypoint script and used to populate

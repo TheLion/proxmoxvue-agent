@@ -31,7 +31,10 @@ write_skeleton_config() {
     verify_tls="${PROXMOX_VERIFY_TLS:-false}"
     poll_interval="${AGENT_POLL_INTERVAL_SECONDS:-30}"
     log_level="${AGENT_LOG_LEVEL:-info}"
-    log_path="${AGENT_LOG_FILE_PATH:-/var/log/proxmoxvue-agent.log}"
+    # Default to a deliberately non-writable path so the agent's log sink
+    # falls back to stderr — that way every INFO event lands in
+    # `docker logs`. Operators who want file logging can override.
+    log_path="${AGENT_LOG_FILE_PATH:-/dev/null/agent.log}"
 
     mkdir -p "$CONFIG_DIR"
     chmod 0700 "$CONFIG_DIR"
