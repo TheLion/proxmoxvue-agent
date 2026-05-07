@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.dockerignore
+dist/
+bin/
+*.test
+*.out
+.DS_Store
+.idea/
+.vscode/
+docs/PLAN-*.md
+proxmoxvue-agent
+docker-compose.yml
+docker-compose.*.yml
+!docker-compose.example.yml

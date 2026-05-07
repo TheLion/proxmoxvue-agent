@@ -1,0 +1,34 @@
+# Example docker-compose for proxmoxvue-agent.
+# Copy to docker-compose.yml, fill in the env vars, and run:
+#   docker compose up -d
+#
+# The volume persists /etc/proxmoxvue-agent across restarts so you only
+# enroll once. To re-enroll with a fresh code, remove the volume:
+#   docker compose down -v && docker compose up -d
+
+services:
+  proxmoxvue-agent:
+    image: ghcr.io/thelion/proxmoxvue-agent:latest
+    container_name: proxmoxvue-agent
+    restart: unless-stopped
+    environment:
+      # Required on first run (used by `--register` to exchange for a
+      # Supabase session). Get this code in the iPad app: Add host.
+      PROXMOXVUE_ENROLLMENT_CODE: "REPLACE_WITH_CODE_FROM_IPAD_APP"
+
+      # Required: how the agent reaches your Proxmox VE API.
+      # Use https://127.0.0.1:8006 if the container shares a network
+      # namespace with the Proxmox host; otherwise use the LAN address.
+      PROXMOX_API_URL: "https://192.168.1.10:8006"
+      PROXMOX_API_TOKEN_ID: "root@pam!proxmoxvue-agent"
+      PROXMOX_API_TOKEN_SECRET: "00000000-0000-0000-0000-000000000000"
+
+      # Optional. Defaults shown.
+      PROXMOX_VERIFY_TLS: "false"          # set true if Proxmox has a trusted cert
+      AGENT_POLL_INTERVAL_SECONDS: "30"
+      AGENT_LOG_LEVEL: "info"              # debug | info | warn | error
+    volumes:
+      - proxmoxvue-agent-config:/etc/proxmoxvue-agent
+
+volumes:
+  proxmoxvue-agent-config:

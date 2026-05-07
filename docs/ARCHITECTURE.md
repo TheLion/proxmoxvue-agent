@@ -2,30 +2,34 @@
 
 ## What the agent does
 
-The agent is a small Go daemon that runs on your Proxmox VE host. It
-bridges your local Proxmox cluster to the ProxmoxVue Supabase backend
-so the ProxmoxVue iPad app can manage the cluster from anywhere,
+The agent is a small Go daemon that runs on your Proxmox VE host **or
+on any Linux machine in the same network** (e.g. a Raspberry Pi 4/5 on
+your LAN). It bridges your Proxmox cluster to the ProxmoxVue Supabase
+backend so the ProxmoxVue iPad app can manage the cluster from anywhere,
 **without opening the Proxmox web-UI to the internet**.
 
 ## Data flow
 
 ```
-┌───────────────┐                 ┌──────────────────┐               ┌──────────────┐
-│ iPad app      │ ─── Supabase ── │ Supabase         │ ─── WS/REST ──│ Agent        │
-│ (Anonymous    │    Realtime     │ (Postgres + RLS) │    outbound   │ (your host)  │
-│  Auth)        │                 │                  │   only        │              │
-└───────────────┘                 └──────────────────┘               └──────┬───────┘
-                                                                            │ localhost
-                                                                            ▼
-                                                                   ┌───────────────┐
-                                                                   │ Proxmox VE    │
-                                                                   │ REST API      │
-                                                                   │ (api2/json)   │
-                                                                   └───────────────┘
+┌───────────────┐                 ┌──────────────────┐               ┌────────────────────┐
+│ iPad app      │ ─── Supabase ── │ Supabase         │ ─── WS/REST ──│ Agent              │
+│ (Anonymous    │    Realtime     │ (Postgres + RLS) │    outbound   │ (Proxmox host or   │
+│  Auth)        │                 │                  │   only        │  LAN machine / Pi) │
+└───────────────┘                 └──────────────────┘               └──────────┬─────────┘
+                                                                                │ localhost
+                                                                                │ or LAN
+                                                                                ▼
+                                                                       ┌───────────────┐
+                                                                       │ Proxmox VE    │
+                                                                       │ REST API      │
+                                                                       │ (api2/json)   │
+                                                                       └───────────────┘
 ```
 
-**The agent makes only outbound connections.** No port is opened on
-your host.
+**The agent makes only outbound connections.** No port is opened on the
+machine it runs on. When the agent runs off-host, the connection from
+agent to Proxmox API stays inside your LAN over HTTPS (Proxmox's
+self-signed cert by default, or a trusted cert if you've installed one).
 
 ## Command flow
 
@@ -83,7 +87,7 @@ enqueue en verwerking weg).
 |---|---|---|
 | `<project>.supabase.co:443` | HTTPS | REST calls: auth token refresh, INSERT status snapshots, UPDATE command results |
 | `<project>.supabase.co:443` | WSS (WebSocket) | Realtime subscription on the `commands` table — receives app→agent commands with <1s latency |
-| `localhost:8006` | HTTPS (Proxmox API) | Cluster/node/VM status, action execution (start, stop, reboot, snapshot) |
+| Proxmox API (`localhost:8006` or LAN address `:8006`) | HTTPS (Proxmox API) | Cluster/node/VM status, action execution (start, stop, reboot, snapshot). Reaches the Proxmox host directly when the agent is on-host, or over the LAN when the agent runs on a separate machine. |
 
 ## On-host files
 

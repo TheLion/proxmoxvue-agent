@@ -1,16 +1,38 @@
 # Installation
 
-## Requirements
+## Where to run the agent
 
-- Proxmox VE 8.x (Debian 12 base)
-- Architecture: `amd64` or `arm64`
-- systemd
+Pick whichever fits your setup — same binary, same enrollment flow:
+
+1. **On your Proxmox VE host itself** — simplest, default API URL is
+   `https://127.0.0.1:8006`.
+2. **On a separate Linux machine in the same network** — any Debian/Ubuntu
+   box that can reach your Proxmox API on port 8006. Works great on a
+   **Raspberry Pi 4 or 5** running 64-bit Raspberry Pi OS or Ubuntu (we
+   ship an `arm64` binary). **Pi 3 / 32-bit ARM (`armv7`) is not
+   supported** by the prebuilt binary — build from source if you need
+   that. Pick the LAN address of your Proxmox host (e.g.
+   `https://192.168.1.10:8006`) when the install script prompts.
+3. **As a Docker container** — see [DOCKER.md](DOCKER.md). Configured via
+   env vars; recommended if you already run other services in containers.
+
+This document covers options 1 and 2 (the systemd-based install). Option
+3 has its own dedicated guide.
+
+## Requirements (options 1 & 2)
+
+- Linux with systemd: Proxmox VE 8.x, Debian 12, Ubuntu 22.04+, or
+  Raspberry Pi OS 64-bit (Bookworm)
+- Architecture: `amd64` or `arm64` (no `armv7` / 32-bit ARM)
 - Root access on the host (the install script uses `sudo`)
+- Network reachability to your Proxmox API on port 8006 (only relevant
+  for option 2)
 
 ## One-line install
 
-Run this on the Proxmox host, replacing `<CODE>` with the enrollment
-code shown in the ProxmoxVue iPad app:
+Run this on the machine where the agent should live (Proxmox host or a
+separate Linux box in the same network), replacing `<CODE>` with the
+enrollment code shown in the ProxmoxVue iPad app:
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/TheLion/proxmoxvue-agent/main/scripts/install.sh \
@@ -59,10 +81,10 @@ for:
 
 | Prompt | Example |
 |---|---|
-| `api_url` | `https://127.0.0.1:8006` |
+| `api_url` | `https://127.0.0.1:8006` (agent on Proxmox host) **or** `https://192.168.1.10:8006` (agent elsewhere on the LAN) |
 | `api_token_id` | `root@pam!proxmoxvue-agent` |
 | `api_token_secret` | `00000000-0000-0000-0000-000000000000` |
-| `verify_tls (y/N)` | `N` (Proxmox uses self-signed certs by default) |
+| `verify_tls (y/N)` | `N` (Proxmox uses self-signed certs by default; set `Y` if you've installed a trusted cert on the Proxmox host) |
 
 If you skipped the prompt or are running headless, edit
 `/etc/proxmoxvue-agent/config.yml` (mode `0600`) so the `proxmox:`
@@ -70,6 +92,9 @@ section looks like this:
 
 ```yaml
 proxmox:
+  # Use https://127.0.0.1:8006 if the agent runs on the Proxmox host itself,
+  # or the LAN address of your Proxmox host (e.g. https://192.168.1.10:8006)
+  # if the agent runs elsewhere in your network.
   api_url: https://127.0.0.1:8006
   api_token_id: root@pam!proxmoxvue-agent
   api_token_secret: 00000000-0000-0000-0000-000000000000
