@@ -41,6 +41,12 @@ func Start(ctx context.Context, configPath, version string) error {
 		return fmt.Errorf("config invalid: %w", err)
 	}
 
+	// Heartbeat file lives next to config.yml. The agent touches it on
+	// every poll attempt so a Docker HEALTHCHECK (or any external
+	// monitor) can distinguish "loop alive" from "process up but loop
+	// frozen" without depending on a particular log level.
+	heartbeatPath := filepath.Join(filepath.Dir(configPath), ".last-poll")
+
 	pve := proxmox.New(proxmox.Config{
 		APIURL:         cfg.Proxmox.APIURL,
 		APITokenID:     cfg.Proxmox.APITokenID,
@@ -100,7 +106,7 @@ func Start(ctx context.Context, configPath, version string) error {
 	}
 	go func() {
 		for cmd := range cmdCh {
-			go handleCommand(ctx, dispatcher, pve, sb, cfg.Supabase.ClusterID, cmd)
+			go handleCommand(ctx, dispatcher, pve, sb, cfg.Supabase.ClusterID, heartbeatPath, cmd)
 		}
 	}()
 
@@ -118,7 +124,7 @@ func Start(ctx context.Context, configPath, version string) error {
 
 	// First push happens immediately so the cluster has a snapshot
 	// right after boot without waiting a full tick.
-	pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID)
+	pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID, heartbeatPath)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -129,7 +135,7 @@ func Start(ctx context.Context, configPath, version string) error {
 			slog.Info("agent stopping", "reason", ctx.Err())
 			return nil
 		case <-ticker.C:
-			if err := pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID); err != nil {
+			if err := pushOnce(ctx, pve, sb, cfg.Supabase.ClusterID, heartbeatPath); err != nil {
 				if errors.Is(err, supabase.ErrRefreshRevoked) {
 					return err
 				}
@@ -138,7 +144,7 @@ func Start(ctx context.Context, configPath, version string) error {
 	}
 }
 
-func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Client, sb *supabase.Client, clusterID string, cmd supabase.Command) {
+func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Client, sb *supabase.Client, clusterID, heartbeatPath string, cmd supabase.Command) {
 	if err := d.Handle(ctx, cmd); err != nil {
 		slog.Error("command handle failed", "id", cmd.ID, "err", err)
 		return
@@ -150,7 +156,7 @@ func handleCommand(ctx context.Context, d *commands.Dispatcher, pve *proxmox.Cli
 	// On timeout we push anyway (UX degradation to the routine 30s
 	// tick, no correctness issue).
 	waitForClusterStateMatch(ctx, pve, cmd)
-	if err := pushOnce(ctx, pve, sb, clusterID); err != nil {
+	if err := pushOnce(ctx, pve, sb, clusterID, heartbeatPath); err != nil {
 		slog.Warn("post-action snapshot push failed", "id", cmd.ID, "err", err)
 	}
 }
@@ -210,7 +216,8 @@ func handleReadCommand(ctx context.Context, d *commands.ReadDispatcher, cmd supa
 	}
 }
 
-func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clusterID string) error {
+func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clusterID, heartbeatPath string) error {
+	touchHeartbeat(heartbeatPath)
 	fetchStart := time.Now()
 	resources, err := pve.ClusterResources(ctx)
 	if err != nil {
@@ -232,6 +239,20 @@ func pushOnce(ctx context.Context, pve *proxmox.Client, sb *supabase.Client, clu
 	// Push failures stay at ERROR.
 	slog.Debug("snapshot pushed", "bytes", len(resources))
 	return nil
+}
+
+// touchHeartbeat updates the mtime of the heartbeat file so external
+// monitors (Docker HEALTHCHECK, Uptime Kuma probe) can detect a
+// frozen poll loop. Best-effort: write failure is logged at Debug and
+// otherwise ignored — a wedged filesystem will manifest as
+// `unhealthy` after a few intervals, which is the desired signal.
+func touchHeartbeat(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		slog.Debug("heartbeat touch failed", "path", path, "err", err)
+	}
 }
 
 // countSnapshotEntries returns the count of node / qemu / lxc / storage

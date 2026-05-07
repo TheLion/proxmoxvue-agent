@@ -12,13 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `${PROXMOXVUE_CONFIG_DIR}/proxmoxvue-agent.log` (was `agent.log`),
   matching the agent's compiled-in default filename. Only affects
   fresh installs; existing `config.yml` files are preserved.
-
-### Fixed
-- Docker `HEALTHCHECK` now reads `agent.log_file_path` from `config.yml`
-  via a new `scripts/docker-healthcheck.sh` instead of hard-coding
-  `${PROXMOXVUE_CONFIG_DIR}/agent.log`. Operators whose config uses the
-  agent's compiled-in default (`/var/log/proxmoxvue-agent.log`) or any
-  custom path no longer go `unhealthy` despite a working poll loop.
+- Docker `HEALTHCHECK` is now backed by a dedicated heartbeat file
+  (`${PROXMOXVUE_CONFIG_DIR}/.last-poll`) that the agent touches on
+  every poll attempt, instead of inferring liveness from log file
+  mtime. Decouples the check from `AGENT_LOG_LEVEL` — the routine
+  per-poll log line is at `Debug` by design, so info-level operators
+  (the default) previously saw `unhealthy` after 2 minutes despite a
+  working poll loop.
 
 ### Added
 - HPKE keypair auto-heal at agent startup — when `supabase.private_key`

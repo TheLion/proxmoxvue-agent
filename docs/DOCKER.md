@@ -100,31 +100,21 @@ Kuma, and any other Docker-aware monitor can tell `healthy` from
 docker inspect --format='{{.State.Health.Status}}' proxmoxvue-agent
 ```
 
-**How it works.** The agent writes an `INFO` log line every poll
-(default 30 seconds — `snapshot pushed (N bytes)` etc.). The
-healthcheck script reads `agent.log_file_path` from `config.yml`
-(falling back to the agent's compiled-in default
-`/var/log/proxmoxvue-agent.log` if the key is absent) and considers
-the container unhealthy if that file's mtime hasn't been touched in
-the last two minutes. That catches the most common failure mode that
-bare `docker ps` misses: the process is still up but the poll loop
-has frozen (network partition that exceeded retry budgets, hung
-Proxmox API call, etc.).
+**How it works.** On every poll attempt the agent touches a
+heartbeat file at `${PROXMOXVUE_CONFIG_DIR}/.last-poll` (next to
+`config.yml`). The healthcheck script considers the container
+unhealthy if that file's mtime hasn't been refreshed in the last two
+minutes. That catches the most common failure mode bare `docker ps`
+misses: the process is still up but the poll loop has frozen (network
+partition that exceeded retry budgets, hung Proxmox API call, etc.).
 
-**Caveat — log levels.** The check assumes per-poll INFO output. If
-you set `AGENT_LOG_LEVEL=warn` or `error`, a healthy idle agent stops
-producing per-poll log lines and the healthcheck will eventually flip
-to unhealthy. Stick with `info` (the default) when running in a
-container, or override the healthcheck at runtime:
-
-```sh
-docker run … --health-cmd="<your-own-check>" …
-```
+The heartbeat is independent of log output, so any `AGENT_LOG_LEVEL`
+(`debug`, `info`, `warn`, `error`) keeps the healthcheck working.
 
 A future agent release is expected to expose an HTTP `/health`
 endpoint with richer state (Supabase session age, Proxmox-API last
-success, refresh-token expiry) that doesn't depend on log volume — see
-the project backlog. Until then, log-mtime is the pragmatic signal.
+success, refresh-token expiry) — see the project backlog. Until then,
+the heartbeat file is the pragmatic signal.
 
 ## Build it yourself
 
