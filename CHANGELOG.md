@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Docker entrypoint default for `log_file_path` is now
+  `${PROXMOXVUE_CONFIG_DIR}/proxmoxvue-agent.log` (was `agent.log`),
+  matching the agent's compiled-in default filename. Only affects
+  fresh installs; existing `config.yml` files are preserved.
+
 ### Fixed
 - Docker `HEALTHCHECK` now reads `agent.log_file_path` from `config.yml`
   via a new `scripts/docker-healthcheck.sh` instead of hard-coding

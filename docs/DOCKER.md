@@ -57,7 +57,7 @@ named volume so the registration survives container restarts.
 | `PROXMOX_VERIFY_TLS` | no | `false` | Set `true` if your Proxmox host has a trusted TLS cert. |
 | `AGENT_POLL_INTERVAL_SECONDS` | no | `30` | Tick frequency for the snapshot push loop. |
 | `AGENT_LOG_LEVEL` | no | `info` | One of `debug` / `info` / `warn` / `error`. |
-| `AGENT_LOG_FILE_PATH` | no | `${PROXMOXVUE_CONFIG_DIR}/agent.log` (i.e. inside the persisted config volume) | The agent fans every log line out to both this file (with lumberjack rotation) and stderr, so `docker logs` shows live output while the file gives you searchable history. Override the path to a separate mount if you'd rather keep config and logs in different volumes; if the path isn't writable the agent falls back to stderr-only. |
+| `AGENT_LOG_FILE_PATH` | no | `${PROXMOXVUE_CONFIG_DIR}/proxmoxvue-agent.log` (i.e. inside the persisted config volume) | The agent fans every log line out to both this file (with lumberjack rotation) and stderr, so `docker logs` shows live output while the file gives you searchable history. Override the path to a separate mount if you'd rather keep config and logs in different volumes; if the path isn't writable the agent falls back to stderr-only. |
 | `PROXMOXVUE_CONFIG_DIR` | no | `/etc/proxmoxvue-agent` | Override only if you need a different mount path. |
 
 The env vars are read by the entrypoint script and used to populate
@@ -102,12 +102,14 @@ docker inspect --format='{{.State.Health.Status}}' proxmoxvue-agent
 
 **How it works.** The agent writes an `INFO` log line every poll
 (default 30 seconds — `snapshot pushed (N bytes)` etc.). The
-healthcheck calls `find ${PROXMOXVUE_CONFIG_DIR}/agent.log -mmin -2`
-and considers the container unhealthy if the log file's mtime hasn't
-been touched in the last two minutes. That catches the most common
-failure mode that bare `docker ps` misses: the process is still up but
-the poll loop has frozen (network partition that exceeded retry
-budgets, hung Proxmox API call, etc.).
+healthcheck script reads `agent.log_file_path` from `config.yml`
+(falling back to the agent's compiled-in default
+`/var/log/proxmoxvue-agent.log` if the key is absent) and considers
+the container unhealthy if that file's mtime hasn't been touched in
+the last two minutes. That catches the most common failure mode that
+bare `docker ps` misses: the process is still up but the poll loop
+has frozen (network partition that exceeded retry budgets, hung
+Proxmox API call, etc.).
 
 **Caveat — log levels.** The check assumes per-poll INFO output. If
 you set `AGENT_LOG_LEVEL=warn` or `error`, a healthy idle agent stops
