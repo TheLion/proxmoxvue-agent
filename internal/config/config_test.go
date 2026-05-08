@@ -53,6 +53,25 @@ func TestUnsetTokenShowsUnset(t *testing.T) {
 	}
 }
 
+func TestEnsureSupabaseDefaults_MigratesLegacyProjectRef(t *testing.T) {
+	cfg := File{Supabase: SupabaseConfig{ProjectRef: "abc"}}
+	EnsureSupabaseDefaults(&cfg)
+	if cfg.Supabase.BaseURL != "https://abc.supabase.co" {
+		t.Fatalf("BaseURL not derived from ProjectRef: got %q", cfg.Supabase.BaseURL)
+	}
+}
+
+func TestEnsureSupabaseDefaults_NoOpWhenBaseURLSet(t *testing.T) {
+	cfg := File{Supabase: SupabaseConfig{
+		BaseURL:    "https://api.proxmoxvue.app",
+		ProjectRef: "abc",
+	}}
+	EnsureSupabaseDefaults(&cfg)
+	if cfg.Supabase.BaseURL != "https://api.proxmoxvue.app" {
+		t.Fatalf("BaseURL was overwritten: got %q", cfg.Supabase.BaseURL)
+	}
+}
+
 func TestEffectiveLogRotation_DefaultsApplied(t *testing.T) {
 	r := AgentConfig{}.EffectiveLogRotation()
 	if r.FilePath != DefaultLogFilePath {
