@@ -17,14 +17,6 @@ import (
 	"time"
 )
 
-// PublishableKey is the project's publishable API key. Safe to ship in
-// the binary — it only identifies the project, not the caller.
-//
-// Kept as package-level constant for callers that build a Client before
-// the remote-config fetcher has produced a value (e.g. early-boot code
-// paths). The Client itself reads from its own publishableKey field.
-const PublishableKey = "sb_publishable_zRZhor-u2pIdiSXAGDLlMA_Dl8tbDS5"
-
 // refreshSkew refreshes a few seconds before actual expiry so an
 // in-flight REST call never starts with a token that expires mid-flight.
 const refreshSkew = 30 * time.Second

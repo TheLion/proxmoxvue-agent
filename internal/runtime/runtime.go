@@ -17,6 +17,7 @@ import (
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
 	"github.com/TheLion/proxmoxvue-agent/internal/keysync"
 	"github.com/TheLion/proxmoxvue-agent/internal/proxmox"
+	"github.com/TheLion/proxmoxvue-agent/internal/remoteconfig"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
 )
 
@@ -28,8 +29,10 @@ const defaultPollInterval = 30 * time.Second
 //
 // `version` is logged at startup so a journalctl grep immediately
 // reveals which build is running (injected via ldflags in release
-// builds).
-func Start(ctx context.Context, configPath, version string) error {
+// builds). `rc` is the remote-config snapshot taken at boot — Start
+// uses it for the Supabase URL/key. A new value picked up by the
+// background RefreshLoop only takes effect on the next restart.
+func Start(ctx context.Context, configPath, version string, rc remoteconfig.Config) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -55,7 +58,7 @@ func Start(ctx context.Context, configPath, version string) error {
 		VerifyTLS:      cfg.Proxmox.VerifyTLS,
 	})
 
-	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, persistRefreshTo(configPath))
+	sb, err := supabase.New(rc.SupabaseBaseURL, rc.SupabasePublishableKey, rc.SupabaseRealtimeURL, cfg.Supabase.RefreshToken, persistRefreshTo(configPath))
 	if err != nil {
 		return fmt.Errorf("build supabase client: %w", err)
 	}

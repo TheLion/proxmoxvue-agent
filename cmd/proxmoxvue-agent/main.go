@@ -17,14 +17,17 @@ import (
 	"github.com/TheLion/proxmoxvue-agent/internal/config"
 	"github.com/TheLion/proxmoxvue-agent/internal/enroll"
 	"github.com/TheLion/proxmoxvue-agent/internal/keysync"
+	"github.com/TheLion/proxmoxvue-agent/internal/remoteconfig"
 	"github.com/TheLion/proxmoxvue-agent/internal/runtime"
 	"github.com/TheLion/proxmoxvue-agent/internal/supabase"
+	"golang.org/x/mod/semver"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
-	defaultProjectRef = "fjesjyoxpkalaudfyebx"
-	defaultConfigPath = "/etc/proxmoxvue-agent/config.yml"
+	defaultProjectRef      = "fjesjyoxpkalaudfyebx"
+	defaultConfigPath      = "/etc/proxmoxvue-agent/config.yml"
+	defaultRemoteCachePath = "/var/lib/proxmoxvue-agent/remote-config.json"
 )
 
 // version is injected via ldflags in release builds:
@@ -80,6 +83,7 @@ func printUsage() {
 func runAgent(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config file")
+	remoteCachePath := fs.String("remote-config-cache", defaultRemoteCachePath, "path to remote-config cache file")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -117,10 +121,35 @@ func runAgent(args []string) {
 	logSink := newLogSink(rotation)
 	slog.SetDefault(slog.New(slog.NewTextHandler(logSink, &slog.HandlerOptions{Level: level})))
 
+	// Server-driven config: pak Supabase URL/key uit /config/v1.json met
+	// fallback naar cache → baked-in. Een wijziging op het endpoint wordt
+	// pas op de volgende restart effectief — we hot-swappen niet.
+	bootCtx, cancelBoot := context.WithTimeout(context.Background(), 10*time.Second)
+	fetcher := remoteconfig.NewFetcher(*remoteCachePath)
+	rc, source := fetcher.Load(bootCtx)
+	cancelBoot()
+	slog.Info("remote-config loaded",
+		"source", source.String(),
+		"base_url", rc.SupabaseBaseURL,
+		"issued_at", rc.IssuedAt)
+
+	if rc.MinAgentVersion != "" {
+		if !semver.IsValid(version) || !semver.IsValid(rc.MinAgentVersion) {
+			slog.Warn("min_agent_version check skipped — non-semver value(s)",
+				"running", version, "required", rc.MinAgentVersion)
+		} else if semver.Compare(version, rc.MinAgentVersion) < 0 {
+			slog.Error("agent version below min_agent_version, refusing to start",
+				"running", version, "required", rc.MinAgentVersion)
+			os.Exit(1)
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	err := runtime.Start(ctx, *configPath, version)
+	go fetcher.RefreshLoop(ctx, remoteconfig.DefaultRefreshInterval)
+
+	err := runtime.Start(ctx, *configPath, version, rc)
 	if errors.Is(err, supabase.ErrRefreshRevoked) {
 		fmt.Fprintln(os.Stderr, "supabase session revoked — re-enroll with --register")
 		os.Exit(exitRevoked)
@@ -158,6 +187,7 @@ func runRegister(args []string) {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	configPath := fs.String("config", "/etc/proxmoxvue-agent/config.yml", "path to write the config file")
 	projectRef := fs.String("project-ref", defaultProjectRef, "Supabase project ref")
+	remoteCachePath := fs.String("remote-config-cache", defaultRemoteCachePath, "path to remote-config cache file")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -224,7 +254,8 @@ func runRegister(args []string) {
 	// the iOS app then shows "agent update needed" on LXC create and
 	// the user can manually re-run --register or --rotate-key.
 	config.EnsureSupabaseDefaults(&cfg)
-	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, nil)
+	rc, _ := remoteconfig.NewFetcher(*remoteCachePath).Load(context.Background())
+	sb, err := supabase.New(rc.SupabaseBaseURL, rc.SupabasePublishableKey, rc.SupabaseRealtimeURL, cfg.Supabase.RefreshToken, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build supabase client: %v\n", err)
 		os.Exit(1)
@@ -351,6 +382,7 @@ func readLine(r *bufio.Reader, prompt string) string {
 func runRotateKey(args []string) {
 	fs := flag.NewFlagSet("rotate-key", flag.ExitOnError)
 	configPath := fs.String("config", defaultConfigPath, "path to config file")
+	remoteCachePath := fs.String("remote-config-cache", defaultRemoteCachePath, "path to remote-config cache file")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -366,7 +398,8 @@ func runRotateKey(args []string) {
 		os.Exit(1)
 	}
 
-	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, nil)
+	rc, _ := remoteconfig.NewFetcher(*remoteCachePath).Load(context.Background())
+	sb, err := supabase.New(rc.SupabaseBaseURL, rc.SupabasePublishableKey, rc.SupabaseRealtimeURL, cfg.Supabase.RefreshToken, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build supabase client: %v\n", err)
 		os.Exit(1)
