@@ -37,7 +37,6 @@ func Start(ctx context.Context, configPath, version string, rc remoteconfig.Conf
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	config.EnsureSupabaseDefaults(&cfg)
 	if info, statErr := os.Stat(configPath); statErr == nil {
 		slog.Debug("config loaded", "path", configPath, "mtime", info.ModTime().UTC().Format(time.RFC3339), "size", info.Size())
 	}
@@ -289,7 +288,7 @@ func countSnapshotEntries(resources []byte) (nodes, qemu, lxc, storage int) {
 }
 
 func validate(cfg config.File) error {
-	if cfg.Supabase.BaseURL == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
+	if cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
 		return fmt.Errorf("supabase section incomplete (run --register first)")
 	}
 	pvCfg := proxmox.Config{

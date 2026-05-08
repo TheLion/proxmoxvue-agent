@@ -230,7 +230,6 @@ func runRegister(args []string) {
 	// below; re-register must not rotate the keypair, otherwise already-
 	// encrypted payloads can no longer be decrypted.
 	cfg.Supabase = config.SupabaseConfig{
-		ProjectRef:   result.ProjectRef,
 		ClusterID:    result.ClusterID,
 		RefreshToken: result.RefreshToken,
 		PrivateKey:   cfg.Supabase.PrivateKey, // preserved across re-register
@@ -253,7 +252,6 @@ func runRegister(args []string) {
 	// LXC passwords E2E-encrypted (#1476). Failure here is not fatal —
 	// the iOS app then shows "agent update needed" on LXC create and
 	// the user can manually re-run --register or --rotate-key.
-	config.EnsureSupabaseDefaults(&cfg)
 	rc, _ := remoteconfig.NewFetcher(*remoteCachePath).Load(context.Background())
 	sb, err := supabase.New(rc.SupabaseBaseURL, rc.SupabasePublishableKey, rc.SupabaseRealtimeURL, cfg.Supabase.RefreshToken, nil)
 	if err != nil {
@@ -392,8 +390,7 @@ func runRotateKey(args []string) {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
-	config.EnsureSupabaseDefaults(&cfg)
-	if cfg.Supabase.BaseURL == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
+	if cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
 		fmt.Fprintln(os.Stderr, "config is missing Supabase enrollment fields — run --register first")
 		os.Exit(1)
 	}

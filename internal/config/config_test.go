@@ -20,7 +20,6 @@ func readFile(path string) (string, error) {
 // plain-token rendering in logs via %+v formatting.
 func TestSupabaseConfigStringRedactsToken(t *testing.T) {
 	cfg := SupabaseConfig{
-		ProjectRef:   "abc",
 		ClusterID:    "cluster-uuid",
 		RefreshToken: "super-secret-token-xyz",
 	}
@@ -46,29 +45,35 @@ func TestProxmoxConfigStringRedactsSecret(t *testing.T) {
 }
 
 func TestUnsetTokenShowsUnset(t *testing.T) {
-	cfg := SupabaseConfig{ProjectRef: "abc"}
+	cfg := SupabaseConfig{ClusterID: "abc"}
 	rendered := cfg.String()
 	if !strings.Contains(rendered, "<unset>") {
 		t.Fatalf("expected <unset> marker for empty token, got: %s", rendered)
 	}
 }
 
-func TestEnsureSupabaseDefaults_MigratesLegacyProjectRef(t *testing.T) {
-	cfg := File{Supabase: SupabaseConfig{ProjectRef: "abc"}}
-	EnsureSupabaseDefaults(&cfg)
-	if cfg.Supabase.BaseURL != "https://abc.supabase.co" {
-		t.Fatalf("BaseURL not derived from ProjectRef: got %q", cfg.Supabase.BaseURL)
+// TestLoad_IgnoresLegacyFields verifies that a config.yml left over from
+// an older agent (with base_url / project_ref) loads cleanly: yaml.v3
+// silently discards unknown fields, so an in-place upgrade just leaves
+// the legacy keys on disk until the next --register rewrites the file.
+func TestLoad_IgnoresLegacyFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yml")
+	legacy := []byte(`supabase:
+  base_url: https://abc.supabase.co
+  project_ref: abc
+  cluster_id: uuid
+  refresh_token: x
+`)
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestEnsureSupabaseDefaults_NoOpWhenBaseURLSet(t *testing.T) {
-	cfg := File{Supabase: SupabaseConfig{
-		BaseURL:    "https://api.proxmoxvue.app",
-		ProjectRef: "abc",
-	}}
-	EnsureSupabaseDefaults(&cfg)
-	if cfg.Supabase.BaseURL != "https://api.proxmoxvue.app" {
-		t.Fatalf("BaseURL was overwritten: got %q", cfg.Supabase.BaseURL)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("legacy config rejected: %v", err)
+	}
+	if got.Supabase.ClusterID != "uuid" || got.Supabase.RefreshToken != "x" {
+		t.Errorf("expected fields not preserved: %+v", got.Supabase)
 	}
 }
 
@@ -145,7 +150,7 @@ func TestSaveLoadRoundtrip_PreservesLoggingFields(t *testing.T) {
 	path := filepath.Join(dir, "config.yml")
 
 	cfg := File{
-		Supabase: SupabaseConfig{ProjectRef: "ref", ClusterID: "uuid", RefreshToken: "x"},
+		Supabase: SupabaseConfig{ClusterID: "uuid", RefreshToken: "x"},
 		Agent: AgentConfig{
 			LogLevel:      "debug",
 			LogFilePath:   "/tmp/x.log",
@@ -170,7 +175,7 @@ func TestSave_WritesInlineComments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
 	cfg := File{
-		Supabase: SupabaseConfig{ProjectRef: "ref", ClusterID: "uuid", RefreshToken: "x"},
+		Supabase: SupabaseConfig{ClusterID: "uuid", RefreshToken: "x"},
 	}
 	EnsureDefaults(&cfg)
 	if err := Save(path, cfg); err != nil {
@@ -192,7 +197,7 @@ func TestSave_WritesInlineComments(t *testing.T) {
 		commentFragment string
 		key             string
 	}{
-		{"Set by --register", "project_ref:"},
+		{"Cluster UUID issued by the backend", "cluster_id:"},
 		{"Long-lived refresh token", "refresh_token:"},
 		{"Tick frequency for the snapshot push loop", "poll_interval_seconds:"},
 		{"debug | info | warn | error", "log_level:"},
