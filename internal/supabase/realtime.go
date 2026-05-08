@@ -74,9 +74,6 @@ func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string) (<
 // returned channel. Reconnects are internal; the channel closes when
 // ctx is cancelled.
 func (c *Client) subscribeTable(ctx context.Context, clusterID, table string) <-chan json.RawMessage {
-	if c.realtimeURL == "" {
-		c.realtimeURL = fmt.Sprintf("wss://%s.supabase.co/realtime/v1/websocket", c.projectRef)
-	}
 	out := make(chan json.RawMessage, 16)
 	go c.runSubscription(ctx, clusterID, table, out)
 	return out
@@ -131,7 +128,7 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
 	defer dialCancel()
 
-	url := fmt.Sprintf("%s?apikey=%s&vsn=1.0.0", c.realtimeURL, PublishableKey)
+	url := fmt.Sprintf("%s?apikey=%s&vsn=1.0.0", c.realtimeURL, c.publishableKey)
 	slog.Debug("realtime ws dial", "table", table, "url", c.realtimeURL)
 	conn, _, err := websocket.Dial(dialCtx, url, nil)
 	if err != nil {

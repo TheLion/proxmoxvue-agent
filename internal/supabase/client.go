@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,10 @@ import (
 
 // PublishableKey is the project's publishable API key. Safe to ship in
 // the binary — it only identifies the project, not the caller.
+//
+// Kept as package-level constant for callers that build a Client before
+// the remote-config fetcher has produced a value (e.g. early-boot code
+// paths). The Client itself reads from its own publishableKey field.
 const PublishableKey = "sb_publishable_zRZhor-u2pIdiSXAGDLlMA_Dl8tbDS5"
 
 // refreshSkew refreshes a few seconds before actual expiry so an
@@ -30,12 +35,13 @@ const refreshSkew = 30 * time.Second
 type PersistRefreshFunc func(newRefreshToken string) error
 
 type Client struct {
-	projectRef  string
-	httpClient  *http.Client
-	persist     PersistRefreshFunc
-	authBase    string
-	restBase    string
-	realtimeURL string // override for tests; empty = wss://<ref>.supabase.co/realtime/v1/websocket
+	baseURL        string // e.g. "https://api.proxmoxvue.app", no trailing slash
+	publishableKey string
+	httpClient     *http.Client
+	persist        PersistRefreshFunc
+	authBase       string
+	restBase       string
+	realtimeURL    string // resolved once in New(); read by subscribeTable
 
 	mu           sync.Mutex
 	accessToken  string
@@ -43,15 +49,34 @@ type Client struct {
 	refreshToken string
 }
 
-func New(projectRef, initialRefreshToken string, persist PersistRefreshFunc) *Client {
-	return &Client{
-		projectRef:   projectRef,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		persist:      persist,
-		authBase:     fmt.Sprintf("https://%s.supabase.co/auth/v1", projectRef),
-		restBase:     fmt.Sprintf("https://%s.supabase.co/rest/v1", projectRef),
-		refreshToken: initialRefreshToken,
+// New builds a Supabase client from a fully-qualified base URL (with
+// scheme) and the project's publishable key. realtimeOverride is used
+// verbatim for WebSocket connections when non-empty; otherwise it's
+// derived from baseURL's host as wss://<host>/realtime/v1/websocket.
+//
+// Resolving realtimeURL once in New() avoids the race where
+// subscribeTable previously wrote to it lazily from two goroutines
+// (-race flagged it even though the value was identical).
+func New(baseURL, publishableKey, realtimeOverride, initialRefreshToken string, persist PersistRefreshFunc) (*Client, error) {
+	base := strings.TrimRight(baseURL, "/")
+	resolvedRT := realtimeOverride
+	if resolvedRT == "" {
+		u, err := url.Parse(base)
+		if err != nil {
+			return nil, fmt.Errorf("parse baseURL %q: %w", base, err)
+		}
+		resolvedRT = fmt.Sprintf("wss://%s/realtime/v1/websocket", u.Host)
 	}
+	return &Client{
+		baseURL:        base,
+		publishableKey: publishableKey,
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		persist:        persist,
+		authBase:       base + "/auth/v1",
+		restBase:       base + "/rest/v1",
+		realtimeURL:    resolvedRT,
+		refreshToken:   initialRefreshToken,
+	}, nil
 }
 
 // ErrRefreshRevoked means the refresh token was rejected by Supabase,
@@ -96,7 +121,7 @@ func (c *Client) refresh(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("build refresh request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", PublishableKey)
+	req.Header.Set("apikey", c.publishableKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -152,5 +177,5 @@ func (c *Client) Ping(ctx context.Context) error {
 // String redacts tokens so accidental fmt.Printf("%+v", client) in logs
 // doesn't leak credentials. Mirrors the guard in internal/config.
 func (c *Client) String() string {
-	return fmt.Sprintf("{projectRef:%s accessToken:[REDACTED] refreshToken:[REDACTED]}", c.projectRef)
+	return fmt.Sprintf("{baseURL:%s accessToken:[REDACTED] refreshToken:[REDACTED]}", c.baseURL)
 }

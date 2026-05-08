@@ -34,6 +34,7 @@ func Start(ctx context.Context, configPath, version string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	config.EnsureSupabaseDefaults(&cfg)
 	if info, statErr := os.Stat(configPath); statErr == nil {
 		slog.Debug("config loaded", "path", configPath, "mtime", info.ModTime().UTC().Format(time.RFC3339), "size", info.Size())
 	}
@@ -54,7 +55,10 @@ func Start(ctx context.Context, configPath, version string) error {
 		VerifyTLS:      cfg.Proxmox.VerifyTLS,
 	})
 
-	sb := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, persistRefreshTo(configPath))
+	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, persistRefreshTo(configPath))
+	if err != nil {
+		return fmt.Errorf("build supabase client: %w", err)
+	}
 
 	// Fail fast: bad Proxmox creds or bad Supabase session should exit
 	// before we start polling.
@@ -282,7 +286,7 @@ func countSnapshotEntries(resources []byte) (nodes, qemu, lxc, storage int) {
 }
 
 func validate(cfg config.File) error {
-	if cfg.Supabase.ProjectRef == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
+	if cfg.Supabase.BaseURL == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
 		return fmt.Errorf("supabase section incomplete (run --register first)")
 	}
 	pvCfg := proxmox.Config{

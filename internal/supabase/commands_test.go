@@ -16,14 +16,16 @@ import (
 func fakeTokenClient(t *testing.T, restBase string) *Client {
 	t.Helper()
 	return &Client{
-		projectRef:   "test",
-		httpClient:   &http.Client{Timeout: 5 * time.Second},
-		persist:      func(string) error { return nil },
-		restBase:     restBase,
-		authBase:     "unused",
-		accessToken:  "fake-jwt",
-		expiresAt:    time.Now().Add(time.Hour),
-		refreshToken: "fake-refresh",
+		baseURL:        "https://test.example.com",
+		publishableKey: "test_key",
+		httpClient:     &http.Client{Timeout: 5 * time.Second},
+		persist:        func(string) error { return nil },
+		restBase:       restBase,
+		authBase:       "unused",
+		realtimeURL:    "wss://test.example.com/realtime/v1/websocket",
+		accessToken:    "fake-jwt",
+		expiresAt:      time.Now().Add(time.Hour),
+		refreshToken:   "fake-refresh",
 	}
 }
 

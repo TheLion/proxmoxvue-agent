@@ -223,7 +223,12 @@ func runRegister(args []string) {
 	// LXC passwords E2E-encrypted (#1476). Failure here is not fatal —
 	// the iOS app then shows "agent update needed" on LXC create and
 	// the user can manually re-run --register or --rotate-key.
-	sb := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
+	config.EnsureSupabaseDefaults(&cfg)
+	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build supabase client: %v\n", err)
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := keysync.UploadPublicKey(ctx, sb, cfg.Supabase.ClusterID, privateKeyB64); err != nil {
@@ -355,12 +360,17 @@ func runRotateKey(args []string) {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
-	if cfg.Supabase.ProjectRef == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
+	config.EnsureSupabaseDefaults(&cfg)
+	if cfg.Supabase.BaseURL == "" || cfg.Supabase.ClusterID == "" || cfg.Supabase.RefreshToken == "" {
 		fmt.Fprintln(os.Stderr, "config is missing Supabase enrollment fields — run --register first")
 		os.Exit(1)
 	}
 
-	sb := supabase.New(cfg.Supabase.ProjectRef, cfg.Supabase.RefreshToken, nil)
+	sb, err := supabase.New(cfg.Supabase.BaseURL, supabase.PublishableKey, "", cfg.Supabase.RefreshToken, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build supabase client: %v\n", err)
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

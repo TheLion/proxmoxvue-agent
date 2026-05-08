@@ -37,7 +37,7 @@ func (c *Client) postRow(ctx context.Context, path string, body []byte) error {
 			return 0, "", fmt.Errorf("build request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("apikey", PublishableKey)
+		req.Header.Set("apikey", c.publishableKey)
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Prefer", "return=minimal")
 
