@@ -34,6 +34,11 @@ services:
       # AGENT_LOG_FILE_PATH: "/var/log/proxmoxvue-agent/agent.log"
     volumes:
       - proxmoxvue-agent-config:/etc/proxmoxvue-agent
+      # Cache voor de server-driven config (proxmoxvue.app/config/v1.json).
+      # Persistent zodat een korte uitval van proxmoxvue.app niet meteen op
+      # de baked-in default valt — fetcher schakelt dan terug op cache.
+      - proxmoxvue-agent-cache:/var/lib/proxmoxvue-agent
 
 volumes:
   proxmoxvue-agent-config:
+  proxmoxvue-agent-cache:

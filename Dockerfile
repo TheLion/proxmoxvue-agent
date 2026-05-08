@@ -20,14 +20,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates tini \
-    && mkdir -p /etc/proxmoxvue-agent /var/log \
-    && chmod 0700 /etc/proxmoxvue-agent
+    && mkdir -p /etc/proxmoxvue-agent /var/lib/proxmoxvue-agent /var/log \
+    && chmod 0700 /etc/proxmoxvue-agent \
+    && chmod 0755 /var/lib/proxmoxvue-agent
 COPY --from=builder /out/proxmoxvue-agent /usr/local/bin/proxmoxvue-agent
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY scripts/docker-healthcheck.sh /usr/local/bin/docker-healthcheck.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh
 
-VOLUME ["/etc/proxmoxvue-agent"]
+VOLUME ["/etc/proxmoxvue-agent", "/var/lib/proxmoxvue-agent"]
 
 ENV PROXMOXVUE_CONFIG_DIR=/etc/proxmoxvue-agent
 

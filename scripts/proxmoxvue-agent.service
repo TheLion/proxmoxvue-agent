@@ -18,6 +18,10 @@ ProtectHome=true
 # rotated backups (.1, .2, .gz) in /var/log/ kan schrijven. Nodig omdat
 # ProtectSystem=strict heel /var/log read-only zou maken zonder deze regel.
 ReadWritePaths=/etc/proxmoxvue-agent /var/log
+# Cache voor de server-driven config (proxmoxvue.app/config/v1.json).
+# StateDirectory creëert /var/lib/proxmoxvue-agent met owner=User automatisch
+# en voegt het impliciet aan ReadWritePaths toe. Persistent over restarts.
+StateDirectory=proxmoxvue-agent
 PrivateTmp=true
 # Single source of truth: agent schrijft direct naar /var/log/proxmoxvue-agent.log
 # via lumberjack. Stdout heeft niets meer; null voorkomt dat journald lege
