@@ -31,6 +31,33 @@ machine it runs on. When the agent runs off-host, the connection from
 agent to Proxmox API stays inside your LAN over HTTPS (Proxmox's
 self-signed cert by default, or a trusted cert if you've installed one).
 
+## Bootstrap (remote-config)
+
+Before the data flow above kicks in, the agent fetches a small JSON
+config from `https://proxmoxvue.app/config/v1.json` to learn which
+Supabase project to talk to. The endpoint returns:
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | `1` — bump on breaking changes |
+| `supabase_base_url` | REST + Realtime base, e.g. `https://<ref>.supabase.co` |
+| `supabase_publishable_key` | The `sb_publishable_…` key (NOT a service-role key) |
+| `supabase_realtime_url` | Optional override for the WS URL |
+| `min_agent_version` | Optional. If set and the running binary is older (semver), the agent **refuses to start** — used as a soft kill-switch when a bad release needs to be retired |
+| `issued_at` | UTC ISO-8601 timestamp |
+
+Loading priority on startup: **live HTTP fetch (8 s timeout) → on-disk
+cache (`/var/lib/proxmoxvue-agent/remote-config.json`) → baked-in
+default compiled into the binary.** This guarantees that an offline
+restart still works.
+
+A background `RefreshLoop` re-fetches every 6 h. New values take effect
+on the next `--register` or restart, not in-flight, since the Supabase
+client is built once at start.
+
+This indirection lets us rotate the backend (or block a buggy agent
+build) without shipping a new binary release.
+
 ## Command flow
 
 Commands worden door de iOS-app (owner) in `public.commands` INSERT'ed.
@@ -97,6 +124,8 @@ enqueue en verwerking weg).
 | `/etc/proxmoxvue-agent/` | `0700` | `root:root` | Config directory |
 | `/etc/proxmoxvue-agent/config.yml` | `0600` | `root:root` | Supabase refresh token + Proxmox API token |
 | `/etc/systemd/system/proxmoxvue-agent.service` | `0644` | `root:root` | Systemd unit |
+| `/var/lib/proxmoxvue-agent/` | `0700` | `root:root` | Cache directory |
+| `/var/lib/proxmoxvue-agent/remote-config.json` | `0644` | `root:root` | Cached startup-config (Supabase URL/key/min version). Non-secret; rewritten on every successful fetch. |
 
 ## Credentials
 

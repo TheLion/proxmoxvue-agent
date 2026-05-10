@@ -125,10 +125,15 @@ management.
 
 | Key | Notes |
 |---|---|
-| `project_ref` | Supabase project ref. Set by `--register`. |
 | `cluster_id` | Cluster UUID issued by the backend during enrollment. |
 | `refresh_token` | Long-lived refresh token. Re-run `--register` if revoked. |
 | `private_key` | X25519 private key (base64) used for HPKE-decrypt of LXC create-passwords. Generated at `--register`. **Treat as a secret.** Use `--rotate-key` to replace it. |
+
+The Supabase URL and publishable API key are **not** in `config.yml` —
+they are fetched at startup from `https://proxmoxvue.app/config/v1.json`
+and cached at `/var/lib/proxmoxvue-agent/remote-config.json`. See
+[ARCHITECTURE.md → Bootstrap (remote-config)](ARCHITECTURE.md#bootstrap-remote-config)
+for the rationale and lookup priority.
 
 ### `proxmox:` — direct connection to the local Proxmox VE API
 
@@ -155,6 +160,16 @@ After editing the file, restart the service:
 ```sh
 sudo systemctl restart proxmoxvue-agent
 ```
+
+### CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config PATH` | `/etc/proxmoxvue-agent/config.yml` | Path to the YAML config file. |
+| `--remote-config-cache PATH` | `/var/lib/proxmoxvue-agent/remote-config.json` | Cached startup-config (Supabase URL/key/min version). Survives `proxmoxvue.app` being unreachable at boot. |
+| `--register CODE` | — | One-shot enrollment. Asks for Proxmox API URL/token interactively, writes `config.yml`, exits. |
+| `--rotate-key` | — | Generates a new HPKE keypair, uploads the public half, exits. |
+| `--version` | — | Print version (set via ldflags in release builds). |
 
 ## Manual install
 

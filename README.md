@@ -89,6 +89,10 @@ a `docker-compose.yml` example.
   metrics
 - Listens for VM/LXC commands (start, stop, reboot, snapshot, create,
   delete) and executes them against the Proxmox REST API
+- Fetches a small startup-config from `https://proxmoxvue.app/config/v1.json`
+  (Supabase URL + publishable key, refreshed every 6 h, cached locally so
+  offline starts work). This lets us rotate the backend without shipping
+  a new binary.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data-flow
 and security model.
