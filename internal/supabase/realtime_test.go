@@ -120,7 +120,7 @@ func TestSubscribeCommands_JoinsCorrectChannel(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SubscribeCommands(ctx, "cluster-abc-123")
+	_, err := c.SubscribeCommands(ctx, "cluster-abc-123", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSubscribeCommands_TracksPresenceAfterJoin(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := c.SubscribeCommands(ctx, "cluster-abc-123")
+	_, err := c.SubscribeCommands(ctx, "cluster-abc-123", nil)
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestSubscribeCommands_JoinRejectedLoopsAndRetries(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123")
+	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123", nil)
 	if err != nil {
 		t.Fatalf("subscribe returned err: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSubscribeCommands_ForwardsInsert(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123")
+	ch, err := c.SubscribeCommands(ctx, "cluster-abc-123", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

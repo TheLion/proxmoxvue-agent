@@ -28,6 +28,51 @@ func (c *Client) PushSnapshot(ctx context.Context, clusterID string, payload jso
 	return nil
 }
 
+// getRows GETs a PostgREST endpoint and returns the body bytes (a JSON
+// array). On 401 it refreshes once and retries. Caller decodes.
+func (c *Client) getRows(ctx context.Context, path string) ([]byte, error) {
+	attempt := func(token string) (int, []byte, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.restBase+path, nil)
+		if err != nil {
+			return 0, nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("apikey", c.publishableKey)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return 0, nil, fmt.Errorf("do request: %w", err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, raw, nil
+	}
+
+	token, err := c.access(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status, raw, err := attempt(token)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized {
+		token, err = c.refresh(ctx)
+		if err != nil {
+			return nil, err
+		}
+		status, raw, err = attempt(token)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("GET %s: status %d: %s", path, status, string(raw))
+	}
+	return raw, nil
+}
+
 // postRow POSTs a single row to a PostgREST endpoint under /rest/v1.
 // On 401 it refreshes once and retries.
 func (c *Client) postRow(ctx context.Context, path string, body []byte) error {

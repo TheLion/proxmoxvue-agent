@@ -38,6 +38,27 @@ func (c *Client) ClaimReadCommand(ctx context.Context, id int64) (bool, error) {
 	return len(returned) > 0, nil
 }
 
+// PendingReadCommands returns rows still in `pending` for this cluster.
+// Used by the catch-up flow on (re)connect to recover events that were
+// missed by the Realtime WS (silent disconnect, NAT eviction, etc.).
+// The dispatcher's TTL-check decides whether each row is actually
+// processed or marked expired — this method just hands them over.
+func (c *Client) PendingReadCommands(ctx context.Context, clusterID string) ([]ReadCommand, error) {
+	path := fmt.Sprintf(
+		"/read_commands?cluster_id=eq.%s&status=eq.pending&select=id,host_id,endpoint,params,status,expires_at&order=id.asc&limit=200",
+		clusterID,
+	)
+	raw, err := c.getRows(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	var rows []ReadCommand
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, fmt.Errorf("decode pending read_commands: %w", err)
+	}
+	return rows, nil
+}
+
 // CompleteReadCommand writes status + result + completed_at. On
 // failed, result is ignored and the caller is expected to set
 // errMsg; result may be nil.

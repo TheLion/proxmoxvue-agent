@@ -44,6 +44,26 @@ func (c *Client) ClaimCommand(ctx context.Context, id int64) (bool, error) {
 	return len(returned) > 0, nil
 }
 
+// PendingCommands returns rows still in `pending` for this cluster.
+// Used by the catch-up flow on (re)connect to recover events that were
+// missed by the Realtime WS. The dispatcher's TTL-check decides whether
+// each row is actually processed or marked expired.
+func (c *Client) PendingCommands(ctx context.Context, clusterID string) ([]Command, error) {
+	path := fmt.Sprintf(
+		"/commands?cluster_id=eq.%s&status=eq.pending&select=id,host_id,kind,payload,status,expires_at&order=id.asc&limit=200",
+		clusterID,
+	)
+	raw, err := c.getRows(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	var rows []Command
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil, fmt.Errorf("decode pending commands: %w", err)
+	}
+	return rows, nil
+}
+
 // CompleteCommand sets status + result + completed_at in a single PATCH.
 // status must be "done", "failed" or "expired".
 func (c *Client) CompleteCommand(ctx context.Context, id int64, status string, result map[string]any) error {

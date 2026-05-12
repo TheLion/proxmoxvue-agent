@@ -106,7 +106,27 @@ func Start(ctx context.Context, configPath, version string, rc remoteconfig.Conf
 		return fmt.Errorf("decode supabase.private_key: %w", decodeErr)
 	}
 	dispatcher.PrivateKey = privBytes
-	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID)
+
+	// onConnected callbacks: after every successful Realtime (re)join,
+	// catch up on rows that piled up while the WS was down. INSERTs that
+	// fired during a WS gap are NOT replayed by Realtime — only NEW
+	// inserts after join. Without catch-up, missed events stay
+	// `pending` forever.
+	cmdCatchUp := func(cbCtx context.Context) {
+		rows, err := sb.PendingCommands(cbCtx, cfg.Supabase.ClusterID)
+		if err != nil {
+			slog.Warn("commands catch-up query failed", "err", err)
+			return
+		}
+		if len(rows) == 0 {
+			return
+		}
+		slog.Info("commands catch-up", "rows", len(rows))
+		for _, cmd := range rows {
+			go handleCommand(cbCtx, dispatcher, pve, sb, cfg.Supabase.ClusterID, heartbeatPath, cmd)
+		}
+	}
+	cmdCh, err := sb.SubscribeCommands(ctx, cfg.Supabase.ClusterID, cmdCatchUp)
 	if err != nil {
 		return fmt.Errorf("subscribe commands: %w", err)
 	}
@@ -118,7 +138,21 @@ func Start(ctx context.Context, configPath, version string, rc remoteconfig.Conf
 
 	// === Read-RPC pipeline (cluster overview/details on-demand). ===
 	readDispatcher := commands.NewReadDispatcher(pve, sb)
-	readCh, err := sb.SubscribeReadCommands(ctx, cfg.Supabase.ClusterID)
+	readCatchUp := func(cbCtx context.Context) {
+		rows, err := sb.PendingReadCommands(cbCtx, cfg.Supabase.ClusterID)
+		if err != nil {
+			slog.Warn("read_commands catch-up query failed", "err", err)
+			return
+		}
+		if len(rows) == 0 {
+			return
+		}
+		slog.Info("read_commands catch-up", "rows", len(rows))
+		for _, cmd := range rows {
+			go handleReadCommand(cbCtx, readDispatcher, cmd)
+		}
+	}
+	readCh, err := sb.SubscribeReadCommands(ctx, cfg.Supabase.ClusterID, readCatchUp)
 	if err != nil {
 		return fmt.Errorf("subscribe read_commands: %w", err)
 	}

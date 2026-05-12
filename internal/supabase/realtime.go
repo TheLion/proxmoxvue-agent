@@ -3,6 +3,7 @@ package supabase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -18,15 +19,33 @@ const (
 	heartbeatInterval = 25 * time.Second
 	heartbeatTopic    = "phoenix"
 	dialTimeout       = 10 * time.Second
+
+	// readDeadline aborts conn.Read if no frame arrives within this
+	// window. Supabase Realtime sends a phx_reply on every heartbeat
+	// (~25s), so 60s of silence is always abnormal — typically a NAT
+	// eviction or upstream edge drop that left the WS half-open.
+	readDeadline = 60 * time.Second
+
+	// ackLagThreshold: missed heartbeat-acks before we force-close.
+	// 2 missed acks = ~50s without server response — long enough to
+	// rule out a single packet-loss, short enough to recover before
+	// the user notices their detail-view hanging.
+	ackLagThreshold = int64(2)
 )
+
+// OnConnectedFunc runs after a successful (re)join. The agent uses this
+// to catch up on rows the Realtime stream missed during a WS gap — the
+// only events delivered post-join are NEW inserts, never historical.
+type OnConnectedFunc func(ctx context.Context)
 
 // SubscribeCommands opens a Realtime channel for INSERTs on
 // public.commands filtered by cluster_id. Returns a channel with
 // Command events. The goroutine keeps running until ctx is cancelled;
-// reconnects are internal.
-func (c *Client) SubscribeCommands(ctx context.Context, clusterID string) (<-chan Command, error) {
+// reconnects are internal. onConnected runs after every successful
+// (re)join — agents use this to catch up on missed events.
+func (c *Client) SubscribeCommands(ctx context.Context, clusterID string, onConnected OnConnectedFunc) (<-chan Command, error) {
 	out := make(chan Command, 16)
-	raw := c.subscribeTable(ctx, clusterID, "commands")
+	raw := c.subscribeTable(ctx, clusterID, "commands", onConnected)
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -48,9 +67,9 @@ func (c *Client) SubscribeCommands(ctx context.Context, clusterID string) (<-cha
 // SubscribeReadCommands is the read-RPC equivalent of SubscribeCommands.
 // Separate channel so the read-dispatcher can run independently from
 // the write-dispatcher — failures on one side don't affect the other.
-func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string) (<-chan ReadCommand, error) {
+func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string, onConnected OnConnectedFunc) (<-chan ReadCommand, error) {
 	out := make(chan ReadCommand, 16)
-	raw := c.subscribeTable(ctx, clusterID, "read_commands")
+	raw := c.subscribeTable(ctx, clusterID, "read_commands", onConnected)
 	go func() {
 		defer close(out)
 		for r := range raw {
@@ -73,28 +92,26 @@ func (c *Client) SubscribeReadCommands(ctx context.Context, clusterID string) (<
 // filtered by cluster_id, and pushes raw record bytes onto the
 // returned channel. Reconnects are internal; the channel closes when
 // ctx is cancelled.
-func (c *Client) subscribeTable(ctx context.Context, clusterID, table string) <-chan json.RawMessage {
+func (c *Client) subscribeTable(ctx context.Context, clusterID, table string, onConnected OnConnectedFunc) <-chan json.RawMessage {
 	out := make(chan json.RawMessage, 16)
-	go c.runSubscription(ctx, clusterID, table, out)
+	go c.runSubscription(ctx, clusterID, table, onConnected, out)
 	return out
 }
 
-func (c *Client) runSubscription(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) {
+func (c *Client) runSubscription(ctx context.Context, clusterID, table string, onConnected OnConnectedFunc, out chan<- json.RawMessage) {
 	defer close(out)
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := c.subscribeOnce(ctx, clusterID, table, out); err != nil {
-			// Idle disconnect / EOF is normal on long-lived WS —
-			// server-side keep-alive timeout or network transition.
-			// Reconnect via backoff is enough; no reason to WARN-log
-			// every disconnect. Real rejections (Unauthorized,
-			// channel-policy) stay WARN.
-			msg := err.Error()
-			if strings.Contains(msg, "EOF") || strings.Contains(msg, "ws read") {
-				slog.Debug("realtime subscription disconnected", "table", table, "err", err)
+		if err := c.subscribeOnce(ctx, clusterID, table, onConnected, out); err != nil {
+			// Pre-join rejections (auth, RLS, bad realtime URL) stay WARN.
+			// Post-join disconnects are logged inside subscribeOnce with
+			// a structured reason ("realtime ws closed"), so we don't
+			// double-log here.
+			if errors.Is(err, errPostJoinClosed) {
+				// Already logged with reason+duration inside subscribeOnce.
 			} else {
 				slog.Warn("realtime subscription rejected", "table", table, "err", err)
 			}
@@ -113,7 +130,12 @@ func (c *Client) runSubscription(ctx context.Context, clusterID, table string, o
 	}
 }
 
-func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out chan<- json.RawMessage) error {
+// errPostJoinClosed is a sentinel: subscribeOnce already logged a
+// structured "realtime ws closed" line with reason+duration. The
+// reconnect loop in runSubscription must NOT log again.
+var errPostJoinClosed = errors.New("realtime ws closed (post-join)")
+
+func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onConnected OnConnectedFunc, out chan<- json.RawMessage) error {
 	token, err := c.access(ctx)
 	if err != nil {
 		return fmt.Errorf("get access token: %w", err)
@@ -199,8 +221,19 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 	if reply.Payload.Status != "ok" {
 		return fmt.Errorf("join rejected: %s", string(reply.Payload.Response))
 	}
-	slog.Debug("realtime channel joined", "topic", topic)
+	slog.Info("realtime subscription connected", "table", table, "topic", topic)
 	dialCancel()
+	connectedAt := time.Now()
+
+	// Catch-up: events that arrived between WS death and reconnect are
+	// not replayed by Realtime — only NEW inserts after join are
+	// delivered. Run the catch-up after a successful join so the
+	// dispatcher can pick up anything still in `pending`. Runs in its
+	// own goroutine so it can't stall the read-loop; the dispatcher's
+	// atomic claim handles the race with concurrent Realtime delivery.
+	if onConnected != nil {
+		go onConnected(ctx)
+	}
 
 	// Track presence: without an explicit track frame iOS doesn't see
 	// any presence_join, not even when the join config has presence
@@ -225,11 +258,22 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 		slog.Warn("realtime presence track failed", "err", err)
 	}
 
-	// Heartbeat loop with ack tracking. hbSent counts hb's sent,
-	// hbAcked counts phx_reply on topic="phoenix". If sent runs ever
-	// further ahead of acked the WS is dead but not (yet) dropped —
-	// silent death we'd otherwise only notice on the next read error.
+	// Heartbeat loop with ack tracking + force-close on lag. hbSent
+	// counts heartbeats sent, hbAcked counts phx_reply on
+	// topic="phoenix". Pre-fix this only logged; now lag >= 2 (~50s of
+	// silence) actively closes the WS so the read-loop errors out and
+	// the reconnect-loop fires. Without this, a half-open TCP (NAT
+	// eviction, Cloudflare edge drop, etc.) would let writes succeed
+	// into the OS buffer forever while Read blocks indefinitely.
 	var hbSent, hbAcked atomic.Int64
+	// closeReason is set by whoever decides to kill the conn so the
+	// read-loop can log a structured reason. atomic.Pointer because
+	// it's read on a different goroutine than the heartbeat that sets it.
+	var closeReason atomic.Pointer[string]
+	setReason := func(r string) {
+		closeReason.CompareAndSwap(nil, &r)
+	}
+
 	hbCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -250,22 +294,51 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, out
 				}
 				sent := hbSent.Add(1)
 				acked := hbAcked.Load()
-				if lag := sent - acked; lag >= 2 {
-					slog.Warn("realtime heartbeat-ack lag",
+				lag := sent - acked
+				slog.Debug("realtime heartbeat",
+					"table", table, "sent", sent, "acked", acked, "lag", lag)
+				if lag >= ackLagThreshold {
+					slog.Warn("realtime heartbeat-ack lag — force-closing ws",
 						"table", table, "sent", sent, "acked", acked, "lag", lag)
-				} else {
-					slog.Debug("realtime heartbeat",
-						"table", table, "sent", sent, "acked", acked)
+					setReason("ack-lag")
+					// CloseNow skips the polite close handshake — the
+					// peer is presumed dead, no point waiting on a close
+					// reply that won't arrive.
+					_ = conn.CloseNow()
+					return
 				}
 			}
 		}
 	}()
 
-	// Read-loop
+	// Read-loop with per-read deadline. Each conn.Read is wrapped in a
+	// context-with-timeout so a silent half-open TCP can't hang it
+	// forever. Supabase Realtime sends a phx_reply on every heartbeat
+	// (~25s), so readDeadline (60s) of pure silence is always abnormal.
 	for {
-		_, raw, err := conn.Read(ctx)
+		readCtx, readCancel := context.WithTimeout(ctx, readDeadline)
+		_, raw, err := conn.Read(readCtx)
+		readCancel()
 		if err != nil {
-			return fmt.Errorf("ws read: %w", err)
+			// Determine close-reason for the structured log:
+			// 1. ack-lag (heartbeat goroutine set it)
+			// 2. read-timeout (our own deadline fired)
+			// 3. peer-close / eof (peer or network)
+			reason := "peer-close"
+			if r := closeReason.Load(); r != nil {
+				reason = *r
+			} else if errors.Is(err, context.DeadlineExceeded) {
+				reason = "read-timeout"
+				setReason(reason)
+			} else if strings.Contains(err.Error(), "EOF") {
+				reason = "eof"
+			}
+			slog.Warn("realtime ws closed",
+				"table", table,
+				"reason", reason,
+				"duration", time.Since(connectedAt).Round(time.Second).String(),
+				"err", err)
+			return errPostJoinClosed
 		}
 		var frame struct {
 			Topic   string          `json:"topic"`
