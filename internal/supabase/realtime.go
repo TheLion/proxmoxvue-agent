@@ -320,8 +320,18 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onC
 						"table", table, "err", err)
 					continue
 				}
+				// token_expires_in shows whether c.access actually returned
+				// a fresh token or just the cached one (still valid above
+				// refreshSkew=30s). If we see ~22m here while JWT-TTL is
+				// ~72m, the in-channel push delivers a near-stale JWT and
+				// the server-side WS-life isn't extended → cause of the
+				// observed reason=eof at ~1h12m. Diagnostic only — fix
+				// follows after one cycle of confirmed evidence.
+				c.mu.Lock()
+				expiresIn := time.Until(c.expiresAt).Round(time.Second).String()
+				c.mu.Unlock()
 				slog.Info("realtime access_token refreshed",
-					"table", table, "topic", topic)
+					"table", table, "topic", topic, "token_expires_in", expiresIn)
 			}
 		}
 	}()
@@ -383,10 +393,18 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onC
 			} else if strings.Contains(err.Error(), "EOF") {
 				reason = "eof"
 			}
+			// token_expires_in at close-time discriminates JWT-driven from
+			// other-reason closes. ~0 ⇒ JWT-exp drove the close (fix
+			// = push genuinely-fresh tokens). >>0 ⇒ NAT/edge/peer
+			// dropped the conn for other reasons.
+			c.mu.Lock()
+			tokenExpiresIn := time.Until(c.expiresAt).Round(time.Second).String()
+			c.mu.Unlock()
 			slog.Warn("realtime ws closed",
 				"table", table,
 				"reason", reason,
 				"duration", time.Since(connectedAt).Round(time.Second).String(),
+				"token_expires_in", tokenExpiresIn,
 				"err", err)
 			return errPostJoinClosed
 		}
