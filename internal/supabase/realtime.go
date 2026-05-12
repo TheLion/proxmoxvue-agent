@@ -298,7 +298,7 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onC
 			case <-hbCtx.Done():
 				return
 			case <-t.C:
-				freshToken, err := c.access(hbCtx)
+				freshToken, err := c.freshAccessToken(hbCtx)
 				if err != nil {
 					slog.Warn("realtime token refresh: get fresh token failed",
 						"table", table, "err", err)
