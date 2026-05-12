@@ -43,13 +43,6 @@ type Client struct {
 	expiresAt    time.Time
 	refreshToken string
 
-	// refreshMu serializes freshAccessToken so the two Realtime
-	// refresh-goroutines (one per channel, ~80ms apart) don't both
-	// POST to /token/refresh with the same refresh_token — Supabase
-	// rotates the refresh_token per call, so the second caller would
-	// hit "refresh_token_already_used" → ErrRefreshRevoked → agent dies.
-	refreshMu sync.Mutex
-
 	// activeSubs registry: topic → active Realtime subscription. Used
 	// by the central refresh-loop to broadcast access_token-events to
 	// all connected channels in one go.
@@ -108,6 +101,9 @@ type activeSub struct {
 // new conn replaces the old).
 func (c *Client) registerSubscription(sub *activeSub) {
 	c.activeSubsMu.Lock()
+	if c.activeSubs == nil {
+		c.activeSubs = map[string]*activeSub{}
+	}
 	c.activeSubs[sub.topic] = sub
 	c.activeSubsMu.Unlock()
 }
@@ -214,32 +210,6 @@ func (c *Client) access(ctx context.Context) (string, error) {
 		return token, nil
 	}
 	c.mu.Unlock()
-	return c.refresh(ctx)
-}
-
-// freshAccessToken returns a token guaranteed to be valid for at least
-// ~30 minutes longer, suitable for the in-channel Realtime refresh push.
-// access() returns the cached token whenever it's still valid beyond
-// refreshSkew (30s) — too short for a 50-min push cadence, the
-// "fresh" token we push is then near-expired and the server doesn't
-// extend the WS-life. refreshMu serializes the two concurrent callers
-// (one per channel, ~80ms apart) so we don't double-rotate the
-// refresh_token and crash with ErrRefreshRevoked.
-func (c *Client) freshAccessToken(ctx context.Context) (string, error) {
-	c.refreshMu.Lock()
-	defer c.refreshMu.Unlock()
-
-	c.mu.Lock()
-	cached := c.accessToken
-	timeLeft := time.Until(c.expiresAt)
-	c.mu.Unlock()
-	// 30min threshold: after a refresh, the new token has ~60min
-	// validity. The second caller arriving ~80ms later sees ~60m left
-	// and re-uses without an extra HTTP refresh. If the cached token
-	// has < 30m left we force a refresh.
-	if cached != "" && timeLeft > 30*time.Minute {
-		return cached, nil
-	}
 	return c.refresh(ctx)
 }
 

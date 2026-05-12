@@ -31,14 +31,6 @@ const (
 	// rule out a single packet-loss, short enough to recover before
 	// the user notices their detail-view hanging.
 	ackLagThreshold = int64(2)
-
-	// tokenRefreshInterval pushes a fresh JWT over the open channel
-	// well before the Supabase default 1h JWT-expiry. Without this the
-	// server force-closes the WS at expiry (reason=eof, ~1h), creating
-	// a brief reconnect-window in which iOS detail-views can still
-	// time out — the symptom that drove this change. 50 min leaves a
-	// comfortable 10-min margin even under clock skew.
-	tokenRefreshInterval = 50 * time.Minute
 )
 
 // OnConnectedFunc runs after a successful (re)join. The agent uses this
@@ -233,6 +225,18 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onC
 	dialCancel()
 	connectedAt := time.Now()
 
+	// Register with the central refresh-loop: this sub will receive
+	// access_token-event pushes every centralRefreshInterval. The loop
+	// activates on first registration via sync.Once.
+	c.registerSubscription(&activeSub{
+		topic:   topic,
+		conn:    conn,
+		nextRef: nextRef,
+		ctx:     ctx,
+	})
+	c.startRefreshLoop(ctx)
+	defer c.unregisterSubscription(topic)
+
 	// Catch-up: events that arrived between WS death and reconnect are
 	// not replayed by Realtime — only NEW inserts after join are
 	// delivered. Run the catch-up after a successful join so the
@@ -284,57 +288,6 @@ func (c *Client) subscribeOnce(ctx context.Context, clusterID, table string, onC
 
 	hbCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	// In-channel access_token refresh — Phoenix protocol per Supabase
-	// Realtime docs: push event="access_token" with the new JWT to the
-	// channel topic; server validates, re-authorizes, updates Postgres
-	// subscriptions in-place. Avoids the otherwise-hourly WS reconnect
-	// at JWT-expiry that briefly stalls iOS detail-views (#1632).
-	go func() {
-		t := time.NewTicker(tokenRefreshInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-hbCtx.Done():
-				return
-			case <-t.C:
-				freshToken, err := c.freshAccessToken(hbCtx)
-				if err != nil {
-					slog.Warn("realtime token refresh: get fresh token failed",
-						"table", table, "err", err)
-					continue
-				}
-				if err := writeJSON(hbCtx, conn, map[string]any{
-					"topic": topic,
-					"event": "access_token",
-					"payload": map[string]any{
-						"access_token": freshToken,
-					},
-					"ref": nextRef(),
-				}); err != nil {
-					// Don't trigger our own close here — the read-loop
-					// will catch any actual error. Refresh-write failure
-					// most likely means the conn is already going down
-					// for another reason.
-					slog.Warn("realtime token refresh: write failed",
-						"table", table, "err", err)
-					continue
-				}
-				// token_expires_in shows whether c.access actually returned
-				// a fresh token or just the cached one (still valid above
-				// refreshSkew=30s). If we see ~22m here while JWT-TTL is
-				// ~72m, the in-channel push delivers a near-stale JWT and
-				// the server-side WS-life isn't extended → cause of the
-				// observed reason=eof at ~1h12m. Diagnostic only — fix
-				// follows after one cycle of confirmed evidence.
-				c.mu.Lock()
-				expiresIn := time.Until(c.expiresAt).Round(time.Second).String()
-				c.mu.Unlock()
-				slog.Info("realtime access_token refreshed",
-					"table", table, "topic", topic, "token_expires_in", expiresIn)
-			}
-		}
-	}()
 
 	go func() {
 		t := time.NewTicker(heartbeatInterval)
