@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // refreshSkew refreshes a few seconds before actual expiry so an
@@ -46,6 +48,12 @@ type Client struct {
 	// rotates the refresh_token per call, so the second caller would
 	// hit "refresh_token_already_used" → ErrRefreshRevoked → agent dies.
 	refreshMu sync.Mutex
+
+	// activeSubs registry: topic → active Realtime subscription. Used
+	// by the central refresh-loop to broadcast access_token-events to
+	// all connected channels in one go.
+	activeSubsMu sync.RWMutex
+	activeSubs   map[string]*activeSub
 }
 
 // New builds a Supabase client from a fully-qualified base URL (with
@@ -75,7 +83,35 @@ func New(baseURL, publishableKey, realtimeOverride, initialRefreshToken string, 
 		restBase:       base + "/rest/v1",
 		realtimeURL:    resolvedRT,
 		refreshToken:   initialRefreshToken,
+		activeSubs:     map[string]*activeSub{},
 	}, nil
+}
+
+// activeSub represents an active Realtime subscription that the central
+// refresh-loop pushes access_token-events to. Lifetime: registered
+// after a successful phx_join, unregistered in subscribeOnce's defer.
+type activeSub struct {
+	topic   string
+	conn    *websocket.Conn
+	nextRef func() string
+	ctx     context.Context
+}
+
+// registerSubscription adds a sub to the registry, overwriting any
+// existing entry with the same topic (handles reconnect cleanly: the
+// new conn replaces the old).
+func (c *Client) registerSubscription(sub *activeSub) {
+	c.activeSubsMu.Lock()
+	c.activeSubs[sub.topic] = sub
+	c.activeSubsMu.Unlock()
+}
+
+// unregisterSubscription removes a sub from the registry by topic.
+// No-op if not present (e.g. already replaced by reconnect).
+func (c *Client) unregisterSubscription(topic string) {
+	c.activeSubsMu.Lock()
+	delete(c.activeSubs, topic)
+	c.activeSubsMu.Unlock()
 }
 
 // ErrRefreshRevoked means the refresh token was rejected by Supabase,
