@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -54,6 +55,11 @@ type Client struct {
 	// all connected channels in one go.
 	activeSubsMu sync.RWMutex
 	activeSubs   map[string]*activeSub
+
+	// refreshLoopOnce gates the central refresh-loop goroutine: it
+	// starts on the first registerSubscription call and runs for the
+	// lifetime of the agent.
+	refreshLoopOnce sync.Once
 }
 
 // New builds a Supabase client from a fully-qualified base URL (with
@@ -112,6 +118,86 @@ func (c *Client) unregisterSubscription(topic string) {
 	c.activeSubsMu.Lock()
 	delete(c.activeSubs, topic)
 	c.activeSubsMu.Unlock()
+}
+
+// centralRefreshInterval is half of the Supabase JWT-TTL (60 min). At
+// 30 min, a sub that joined right after a tick still has ≥30 min token
+// validity at the next tick — guarantees no JWT-driven EOF without a
+// pre-flight refresh on join.
+const centralRefreshInterval = 30 * time.Minute
+
+// startRefreshLoop starts the central token-refresh loop. Idempotent
+// via sync.Once: subsequent calls are no-ops. Called from
+// registerSubscription so the loop activates on the first sub and
+// keeps running for the lifetime of the agent (or until ctx cancels).
+func (c *Client) startRefreshLoop(ctx context.Context) {
+	c.startRefreshLoopFor(ctx, c.refreshAndPushAll)
+}
+
+// startRefreshLoopFor is the testable form. fn is the per-tick action.
+func (c *Client) startRefreshLoopFor(ctx context.Context, fn func()) {
+	c.refreshLoopOnce.Do(func() {
+		go func() {
+			t := time.NewTicker(centralRefreshInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					fn()
+				}
+			}
+		}()
+	})
+}
+
+// refreshAndPushAll runs per central-loop tick: refresh the JWT, then
+// broadcast an access_token-event to every active sub. Errors per sub
+// are logged but don't stop the broadcast — a dead conn on one sub
+// shouldn't block updates to the others; the read-loop on that sub
+// will close it independently.
+func (c *Client) refreshAndPushAll() {
+	ctx := context.Background()
+	freshToken, err := c.refresh(ctx)
+	if err != nil {
+		slog.Warn("central refresh: get fresh token failed", "err", err)
+		return
+	}
+	c.activeSubsMu.RLock()
+	subs := make([]*activeSub, 0, len(c.activeSubs))
+	for _, s := range c.activeSubs {
+		subs = append(subs, s)
+	}
+	c.activeSubsMu.RUnlock()
+	pushed := 0
+	for _, sub := range subs {
+		if err := c.pushAccessToken(sub, freshToken); err != nil {
+			slog.Warn("central refresh: push failed",
+				"topic", sub.topic, "err", err)
+			continue
+		}
+		pushed++
+	}
+	// expiresAt read without c.mu — diagnostic-only field for the log;
+	// any concurrent write is a few-byte time.Time race that doesn't
+	// affect correctness of the broadcast.
+	slog.Info("realtime access_token refreshed (central)",
+		"subs_pushed", pushed,
+		"subs_total", len(subs),
+		"token_expires_in", time.Until(c.expiresAt).Round(time.Second).String())
+}
+
+// pushAccessToken sends an access_token-event to one sub.
+func (c *Client) pushAccessToken(sub *activeSub, token string) error {
+	return writeJSON(sub.ctx, sub.conn, map[string]any{
+		"topic": sub.topic,
+		"event": "access_token",
+		"payload": map[string]any{
+			"access_token": token,
+		},
+		"ref": sub.nextRef(),
+	})
 }
 
 // ErrRefreshRevoked means the refresh token was rejected by Supabase,
