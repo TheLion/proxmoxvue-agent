@@ -46,6 +46,7 @@ var readEndpointWhitelist = []*regexp.Regexp{
 	regexp.MustCompile(`^/api2/json/nodes/[^/]+/(qemu|lxc)/\d+/config$`),
 	regexp.MustCompile(`^/api2/json/nodes/[^/]+/(qemu|lxc)/\d+/snapshot$`),
 	regexp.MustCompile(`^/api2/json/nodes/[^/]+/(qemu|lxc)/\d+/feature$`),
+	regexp.MustCompile(`^/api2/json/nodes/[^/]+/qemu/\d+/agent/get-fsinfo$`),
 	regexp.MustCompile(`^/api2/json/nodes/[^/]+/storage/[^/]+/content$`),
 }
 

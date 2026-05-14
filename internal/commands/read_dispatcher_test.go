@@ -206,6 +206,7 @@ func TestEndpointAllowed(t *testing.T) {
 		"/api2/json/nodes/pve1/qemu/100/config",
 		"/api2/json/nodes/pve1/lxc/200/snapshot",
 		"/api2/json/nodes/pve1/qemu/100/feature",
+		"/api2/json/nodes/pve1/qemu/100/agent/get-fsinfo",
 		"/api2/json/nodes/pve1/storage/local/content",
 	}
 	denied := []string{
@@ -214,6 +215,9 @@ func TestEndpointAllowed(t *testing.T) {
 		"/api2/json/cluster/firewall/rules",
 		"/api2/json/nodes/pve1/qemu/100/config/secret",
 		"/api2/json/nodes/pve1/qemu/100",
+		"/api2/json/nodes/pve1/lxc/200/agent/get-fsinfo",
+		"/api2/json/nodes/pve1/qemu/100/agent/exec",
+		"/api2/json/nodes/pve1/qemu/100/agent/file-write",
 		"",
 	}
 	for _, p := range allowed {
