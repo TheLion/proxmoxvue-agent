@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-14
+
+### Added
+- Allow `/api2/json/nodes/<node>/qemu/<vmid>/agent/get-fsinfo` on the
+  read-endpoint whitelist so the iPad app can fetch real filesystem
+  usage for QEMU VMs via the QEMU guest-agent. Only `get-fsinfo` is
+  whitelisted — destructive agent endpoints (`exec`, `file-write`,
+  etc.) remain denied.
+
 ### Changed
 - Docker entrypoint default for `log_file_path` is now
   `${PROXMOXVUE_CONFIG_DIR}/proxmoxvue-agent.log` (was `agent.log`),
